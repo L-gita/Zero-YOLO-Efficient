@@ -1,4 +1,4 @@
-r"""用自己的照片跑 Zero-DCE 增强。
+r"""用 Zero-DCE 增强自己的照片（可选：马赛克预处理 + 16-bit 输出）。
 
 用法（Windows，命令行）：
     & C:\Users\12983\Documents\repro\.venv\Scripts\python.exe C:\Users\12983\Documents\repro\enhance.py <照片或文件夹> [更多...]
@@ -12,10 +12,19 @@ r"""用自己的照片跑 Zero-DCE 增强。
     -s / --scale N        先把长边缩到 N 再处理（默认 0=不缩放）
     --tile                强制分块处理（超大清不了显存时用）
 
+马赛克预处理（默认全关，不写就和以前完全一样）：
+    --denoise FLOAT       色度优先降噪强度（0=关；1=推荐；2=很强）
+    --deblock FLOAT       JPEG 8x8 去块强度（0=关；1=推荐）
+    --prelift FLOAT       增强前暗部轻抬（0=关；0.15=推荐）
+    --post FLOAT          增强后保边平滑（0=关；1=推荐）
+    --bit16               输出 16-bit PNG（避免再被压回 8-bit）
+    --preprocess preset   一键预设：mosaic（推荐整套）/ light / strong
+
 例：
     python enhance.py D:\照片\夜景.jpg
     python enhance.py D:\照片\全家福 -o D:\增强结果 -c
     python enhance.py "D:\照片\夜景.jpg" -m official
+    python enhance.py "D:\照片\夜景.jpg" --preprocess mosaic -c      # 治马赛克
 """
 import argparse
 import glob
@@ -39,9 +48,11 @@ if sys.platform == "win32":          # 让控制台能正常显示中文
 ROOT = os.path.dirname(os.path.abspath(__file__))
 CODE = os.path.join(ROOT, "Zero-DCE", "Zero-DCE_code")
 sys.path.insert(0, CODE)
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
 warnings.filterwarnings("ignore")
 
 import model  # noqa: E402
+import preprocess as pp  # noqa: E402
 
 EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
 MODELS = {
@@ -49,6 +60,12 @@ MODELS = {
     "sice": os.path.join(CODE, "snapshots_sice", "Epoch50.pth"),
     "edge": os.path.join(CODE, "snapshots_sice_edge", "Epoch49.pth"),   # 加论文 (4.12) Sobel 边缘损失训练的模型（50 轮）
     "lol": os.path.join(CODE, "snapshots_run", "Epoch199.pth"),
+}
+# 预处理预设：--preprocess 一键选
+PRESETS = {
+    "mosaic": dict(denoise=1.0, deblock=1.0, prelift=0.15, post=1.0),   # 推荐：针对极暗/马赛克
+    "light": dict(denoise=0.6, deblock=0.0, prelift=0.10, post=0.6),    # 温和：一般夜景
+    "strong": dict(denoise=2.0, deblock=1.0, prelift=0.25, post=1.5),   # 强：极端暗光
 }
 _net_cache = {}
 
@@ -58,7 +75,7 @@ def get_net(path):
         if not os.path.exists(path):
             raise SystemExit(f"找不到权重文件: {path}")
         net = model.enhance_net_nopool()
-        net.load_state_dict(torch.load(path, map_location="cpu"))
+        net.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
         net.eval()
         if torch.cuda.is_available():
             net = net.cuda()
@@ -67,8 +84,8 @@ def get_net(path):
     return _net_cache[path]
 
 
-def _run(net, arr, half=False):
-    """arr: HxWx3 float32 [0,1] -> enhanced np.uint8"""
+def _run_float(net, arr, half=False):
+    """arr: HxWx3 float32 [0,1] -> 增强结果 float32 [0,1]"""
     device = "cuda" if torch.cuda.is_available() else "cpu"
     t = torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(device)
     with torch.no_grad():
@@ -77,24 +94,34 @@ def _run(net, arr, half=False):
                 _, out, _ = net(t)
         else:
             _, out, _ = net(t)
-        out = out.float().clamp(0, 1).squeeze(0).permute(1, 2, 0).cpu().numpy()
+    return out.float().clamp(0, 1).squeeze(0).permute(1, 2, 0).cpu().numpy()
+
+
+def _run(net, arr, half=False):
+    """arr: HxWx3 float32 [0,1] -> enhanced np.uint8"""
+    out = _run_float(net, arr, half=half)
     return (out * 255.0 + 0.5).astype(np.uint8)
 
 
-def enhance_image(net, pil, force_tile=False):
-    """整图处理；显存不够时自动降级 fp16 → 分块。返回 (PIL.Image, 模式说明)"""
+def enhance_image(net, pil, force_tile=False, return_float=False):
+    """整图处理；显存不够时自动降级 fp16 → 分块。返回 (结果, 模式说明)"""
     arr = np.asarray(pil, dtype=np.float32) / 255.0
     if force_tile:
         return _tiled(net, pil), "tile(force)"
     try:
-        return Image.fromarray(_run(net, arr)), "full/fp32"
+        out = _run_float(net, arr)
+        mode = "full/fp32"
     except torch.cuda.OutOfMemoryError:
         torch.cuda.empty_cache()
         try:
-            return Image.fromarray(_run(net, arr, half=True)), "full/fp16"
+            out = _run_float(net, arr, half=True)
+            mode = "full/fp16"
         except torch.cuda.OutOfMemoryError:
             torch.cuda.empty_cache()
             return _tiled(net, pil), "tile"
+    if return_float:
+        return out, mode
+    return Image.fromarray((out * 255.0 + 0.5).astype(np.uint8)), mode
 
 
 def _tiled(net, pil, tile=1024, overlap=128):
@@ -132,15 +159,43 @@ def collect_inputs(paths):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="用 Zero-DCE 增强自己的照片")
+    ap = argparse.ArgumentParser(description="用 Zero-DCE 增强自己的照片（可选马赛克预处理）")
     ap.add_argument("inputs", nargs="+", help="照片文件或文件夹（可多个）")
     ap.add_argument("-o", "--out", default=None, help="输出目录")
-    ap.add_argument("-m", "--model", default="sice", help="official|sice|lol|.pth 路径")
+    ap.add_argument("-m", "--model", default="sice", help="official|sice|edge|lol|.pth 路径")
     ap.add_argument("-c", "--compare", action="store_true", help="生成并排对比图")
     ap.add_argument("-j", "--jpg", action="store_true", help="输出 jpg")
     ap.add_argument("-s", "--scale", type=int, default=0, help="长边缩放到 N 像素（0=不缩放）")
     ap.add_argument("--tile", action="store_true", help="强制分块处理")
+    # 马赛克预处理
+    ap.add_argument("--preprocess", default=None, help="预设：mosaic|light|strong")
+    ap.add_argument("--denoise", type=float, default=0.0, help="色度优先降噪强度（0=关, 1=推荐）")
+    ap.add_argument("--deblock", type=float, default=0.0, help="JPEG 去块强度（0=关, 1=推荐）")
+    ap.add_argument("--prelift", type=float, default=0.0, help="增强前暗部轻抬（0=关, 0.15=推荐）")
+    ap.add_argument("--post", type=float, default=0.0, help="增强后保边平滑（0=关, 1=推荐）")
+    ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
     args = ap.parse_args()
+
+    # 预设 → 具体参数（显式给出的参数优先）
+    if args.preprocess:
+        key = args.preprocess.lower()
+        if key not in PRESETS:
+            raise SystemExit(f"未知预设 {key}，可选：{', '.join(PRESETS)}")
+        p = PRESETS[key]
+        if args.denoise == 0.0:
+            args.denoise = p["denoise"]
+        if args.deblock == 0.0:
+            args.deblock = p["deblock"]
+        if args.prelift == 0.0:
+            args.prelift = p["prelift"]
+        if args.post == 0.0:
+            args.post = p["post"]
+
+    use_pre = (args.denoise > 0 or args.deblock > 0 or args.prelift > 0)
+    use_post = args.post > 0
+    if use_pre or use_post:
+        print(f"[预处理] 去块={args.deblock:g}  色度降噪={args.denoise:g}  "
+              f"暗部轻抬={args.prelift:g}  后处理平滑={args.post:g}  16bit={args.bit16}")
 
     ckpt = MODELS.get(args.model.lower(), args.model)
     net = get_net(ckpt)
@@ -169,7 +224,24 @@ def main():
 
         t0 = time.time()
         try:
-            out, mode = enhance_image(net, im, args.tile)
+            # ① 增强前的预处理（去块 → 降噪 → 轻抬）
+            pre = im
+            if use_pre:
+                pre = Image.fromarray(pp.preprocess(
+                    np.asarray(im), denoise=args.denoise,
+                    deblock_strength=args.deblock, prelift_amount=args.prelift))
+            # ② Zero-DCE 增强（bit16 时保留 float 结果，避免再被压回 8-bit）
+            raw, mode = enhance_image(net, pre, args.tile, return_float=args.bit16)
+            # ③ 增强后的保边平滑
+            if use_post:
+                arr = raw if isinstance(raw, np.ndarray) else np.asarray(raw, dtype=np.float32) / 255.0
+                u8 = (arr * 255.0 + 0.5).astype(np.uint8) if isinstance(raw, np.ndarray) else np.asarray(raw)
+                u8 = pp.post_smooth(u8, args.post)
+                out_f = u8.astype(np.float32) / 255.0
+                out = out_f if args.bit16 else Image.fromarray(u8)
+            else:
+                out_f = raw if isinstance(raw, np.ndarray) else np.asarray(raw, dtype=np.float32) / 255.0
+                out = raw if (args.bit16 or isinstance(raw, Image.Image)) else Image.fromarray(raw)
         except Exception as e:  # noqa: BLE001
             print(f"[{i}/{len(files)}] 处理失败 {os.path.basename(f)}: {e}")
             continue
@@ -177,18 +249,25 @@ def main():
 
         base = os.path.splitext(os.path.basename(f))[0]
         save_jpg = args.jpg or os.path.splitext(f)[1].lower() in (".jpg", ".jpeg")
-        ext = ".jpg" if save_jpg else ".png"
-        outp = os.path.join(outdir, base + "_enhanced" + ext)
-        if save_jpg:
-            out.save(outp, quality=95, subsampling=1)
+        if args.bit16:
+            outp = os.path.join(outdir, base + "_enhanced16.png")
+            pp.save_16bit(out_f, outp)
+            out8 = Image.fromarray((np.clip(out_f, 0, 1) * 255.0 + 0.5).astype(np.uint8))
+            ext = ".png"
         else:
-            out.save(outp)
+            out8 = out if isinstance(out, Image.Image) else Image.fromarray(out)
+            ext = ".jpg" if save_jpg else ".png"
+            outp = os.path.join(outdir, base + "_enhanced" + ext)
+            if save_jpg:
+                out8.save(outp, quality=95, subsampling=1)
+            else:
+                out8.save(outp)
 
         if args.compare:
             w, h = im.size
             canvas = Image.new("RGB", (w * 2 + 8, h), (20, 20, 20))
             canvas.paste(im, (0, 0))
-            canvas.paste(out, (w + 8, 0))
+            canvas.paste(out8, (w + 8, 0))
             cp = os.path.join(outdir, base + "_compare" + (".jpg" if save_jpg else ".png"))
             if save_jpg:
                 canvas.save(cp, quality=92, subsampling=1)
@@ -196,7 +275,7 @@ def main():
                 canvas.save(cp)
 
         before = float(np.asarray(im).mean())
-        after = float(np.asarray(out).mean())
+        after = float(np.asarray(out8).mean())
         print(f"[{i}/{len(files)}] {os.path.basename(f):28s} {im.width}x{im.height}  "
               f"亮度 {before:5.1f} → {after:5.1f}   {dt:4.1f}s  ({mode})  -> {os.path.basename(outp)}")
         done += 1

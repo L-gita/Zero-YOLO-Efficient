@@ -68,3 +68,5 @@ scripts/copy_locked_file.py
 
 # ---------- 官方仓库网页快照（非代码） ----------
 Zero-DCE/Zero-DCE_files/
+demo_mosaic/_smoke/
+demo_mosaic/_selftest/

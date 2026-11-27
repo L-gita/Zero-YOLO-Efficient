@@ -206,3 +206,30 @@ python C:\Users\12983\Documents\repro\scripts\pair_compare.py `
 | `summary.md` | 指标表 + 可直接贴报告的图注 |
 
 指标口径：`L_edge` 是论文 (4.12) 的逐通道 Sobel 幅值差；`cos` 是梯度方向一致性（1=同向）；`放大倍数 M(B)/M(A)` 越接近 1 表示梯度尺度越接近。**两图尺寸不同会自动把 B 缩放到 A 并提示。**
+
+---
+
+## 11. 进阶：马赛克预处理（暗光/压缩重的图）
+
+暗光图增强后容易出现彩色花斑/块状"马赛克"——这是把原图已有的 8-bit 台阶、色度噪声、JPEG 8×8 压缩缝一起放大了。
+加一套预处理（去块 → 色度优先降噪 → 暗部轻抬）和后处理（降噪 + 保边平滑）就能明显改善。
+
+```powershell
+# 推荐档（最常用）
+python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess mosaic -c --bit16
+
+# 温和档 / 强力档
+python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess light -c
+python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess strong --bit16
+
+# 单项手动控制（0 = 关闭）
+python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --denoise 1.0 --deblock 1.0 --prelift 0.15 --post 1.0
+
+# 不加参数 = 和以前完全一样（默认全关）
+python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
+```
+
+效果（eval15 15 对，相对不开预处理的基线）：色度噪声 **−91%**、梯度放大 **5.47×→1.80×**、块效应比 1.004→0.882、PSNR 15.86→16.08。
+细节与取舍见 `C:\Users\12983\Documents\repro\docs\零-DCE_马赛克预处理方案.md`。
+
+**注意：** `--bit16` 会另存一份 `_enhanced16.png`（16 位），但微信/照片查看器会压回 8 位；用 Photoshop/GIMP 才能看到位深差别。

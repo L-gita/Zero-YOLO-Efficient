@@ -238,3 +238,55 @@ python scripts\pair_compare.py 低照.png 正常光.png --label-a 低照输入 -
 ```
 
 普通小依赖走 `-i https://mirror.sjtu.edu.cn/pypi/web/simple`。
+
+## 8. 马赛克预处理（方案 B）
+
+Zero-DCE 的曲线在暗区斜率 >1，会把暗光图本来就有的 **8-bit 量化台阶、色度噪声、JPEG 8×8 压缩缝** 一起放大。
+我们加了一套"终端侧预处理"（不是 ISP，但等价于 ISP 的降噪/色调映射环节），在增强前后夹住噪声放大：
+
+```
+输入 → ① 去块 → ② 色度优先降噪 → ③ 暗部轻抬 → ④ Zero-DCE 增强 → ⑤ 后置降噪 + 保边平滑 → 输出（可 16-bit）
+```
+
+**一句话使用（推荐档）：**
+
+```powershell
+cd C:\Users\12983\Documents\repro
+python enhance.py "D:\照片\夜景.jpg" --preprocess mosaic -c --bit16
+```
+
+**三档预设：**
+
+| 预设 | 去块 | 色度降噪 | 暗部轻抬 | 后处理 | 适用 |
+| --- | --- | --- | --- | --- | --- |
+| `light` | 0 | 0.6 | 0.10 | 0.6 | 一般夜景，怕抹细节 |
+| `mosaic`（推荐） | 1.0 | 1.0 | 0.15 | 1.0 | 暗光/压缩重/色噪明显 |
+| `strong` | 1.0 | 2.0 | 0.25 | 1.5 | 极端暗图（几乎全黑） |
+
+也可以单项手动开：`--denoise 1.0 --deblock 1.0 --prelift 0.15 --post 1.0`；
+**不加任何参数 = 与原来完全一致**（默认全关）。
+
+**E0~E5 对照实验结果（同一模型 `snapshots_sice/Epoch50.pth`，36 张图，暗区掩码统计）：**
+
+| eval15（15 对） | 色度噪声 std | 块效应比 | 梯度放大 M | PSNR | SSIM |
+| --- | --- | --- | --- | --- | --- |
+| E1 基线 | 12.177 | 1.004 | 5.47× | 15.86 | 0.5584 |
+| E2 先降噪 | 2.692 | 1.021 | 2.10× | 15.94 | 0.6582 |
+| E3 后降噪 | 2.207 | 1.007 | 3.85× | 16.06 | **0.6860** |
+| E4 弱降噪+平滑 | 2.482 | 1.025 | 2.19× | 15.97 | 0.6772 |
+| **E5 本文方案** | **1.076** | **0.882** | **1.80×** | **16.08** | 0.6573 |
+
+- 相对基线：色噪 **−91.2%**、块效应比 −12.1%、梯度放大 **−67.1%**；LIME −81.3% / 极端暗图 −74.4% / DICM −86.7%（色噪）。
+- 结论：①先降噪有效 ②只做后置降噪不够（色噪低但梯度放大仍 3.85×）③E5 综合最优，代价是重度平滑牺牲部分纹理。
+
+**产物：** `scripts/preprocess.py`（算子）、`scripts/mosaic_ablation.py`（E0~E5 实验）、`scripts/make_mosaic_figs.py`（画图）、
+`demo_mosaic/ablation/`（`metrics.csv`、`summary.md`、`fig_A/fig_B`、3 组 `strip_*.png`）、
+文档 `docs/零-DCE_马赛克预处理方案.md`。
+
+**重跑实验 / 重画图：**
+
+```powershell
+python scripts\mosaic_ablation.py --sets eval15,lime,extreme,dicm
+python scripts\make_mosaic_figs.py
+```
+
