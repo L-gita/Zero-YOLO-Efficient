@@ -52,7 +52,8 @@ sys.path.insert(0, os.path.join(ROOT, "scripts"))
 warnings.filterwarnings("ignore")
 
 import model  # noqa: E402
-import preprocess as pp  # noqa: E402
+import preprocess as pp
+import preprocess_v4 as ppv4  # noqa: E402
 
 EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
 MODELS = {
@@ -69,6 +70,9 @@ PRESETS = {
                  dark_gamma=0.60, dark_smooth=8, dither=0.4),
     # mosaic（推荐）：轻度预处理 + 亮度引导色度平滑 + 近黑区限增益（消除彩色大斑块）
     "mosaic": dict(denoise=0.5, deblock=0.5, prelift=0.10, guided=0.5, limit_dark=0.80, dark_gamma=0.55, dark_smooth=8, dither=0.6),
+    # v4：保守预处理 + A+B 色度去噪（色度噪声判据 + 引导羽化），只动色度不动亮度结构
+    "v4": dict(denoise=-1.0, deblock=-1.0, prelift=-1.0, guided=0.0, limit_dark=-1.0,
+               dark_gamma=0.55, dark_smooth=8, dither=0.4),
     # light（温和）：一般夜景，尽量少动细节
     "light": dict(denoise=0.4, deblock=0.0, prelift=0.06, guided=0.3, limit_dark=0.0, dark_gamma=0.70, dark_smooth=8, dither=0.0),
     # dark（极暗）：更猛一点
@@ -196,6 +200,10 @@ def main():
                     help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
     ap.add_argument("--auto-strength", type=float, default=-1.0,
                     help="auto 模式的总强度；-1=保守自动（普通暗图 0.45、近黑图 1.0），1.0=原 auto v3 全强度，0=完全等价原版，也可给 0~2 之间的数")
+    ap.add_argument("--v4-strength", type=float, default=0.9, help="v4 色度去噪强度（默认 0.9）")
+    ap.add_argument("--v4-tau", type=float, default=5.0, help="v4 色度噪声阈值（越大越保守）")
+    ap.add_argument("--v4-beta", type=float, default=1.6, help="v4 亮度结构保护系数（越大越保护真实彩边）")
+    ap.add_argument("--v4-guide", type=int, default=16, help="v4 权重羽化半径（像素）")
     ap.add_argument("--dither", type=float, default=0.6,
                     help="输出 8bit 前的抖动强度（抑制条带；0.6≈0.6 个灰度级）")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
@@ -220,12 +228,14 @@ def main():
         if args.limit_dark == 0.0:
             args.limit_dark = p["limit_dark"]
 
-    auto_mode = (args.preprocess or "").lower() == "auto" or args.denoise < 0
+    _pp = (args.preprocess or "").lower()
+    v4_mode = _pp == "v4"
+    auto_mode = _pp in ("auto", "v4") or args.denoise < 0
     use_pre = (args.denoise > 0 or args.deblock > 0 or args.prelift > 0)
     use_post = (args.post > 0 or args.guided > 0 or args.limit_dark > 0)
     if auto_mode:
-        print("[预处理] auto 场景自适应（E10）：先估噪声/块效应，再按需降噪/去块/轻抬；"
-              "暗图才做近黑限增益")
+        print("[预处理] auto 场景自适应（E10）" + ("+v4（A+B 色度去噪）" if v4_mode else "") +
+              "：先估噪声/块效应，再按需降噪/去块/轻抬；暗图才做近黑限增益")
     elif use_pre or use_post:
         print(f"[预处理] 去块={args.deblock:g}  色度降噪={args.denoise:g}  "
               f"暗部轻抬={args.prelift:g}  | 后处理: 引导平滑={args.guided:g}  "
@@ -293,11 +303,17 @@ def main():
                         strength=0.80 * s_eff, smooth_radius=args.dark_smooth, dither=0.0),
                         dither=args.dither)
                 else:
-                    amp_ref = pp.chroma_amp(u8)
-                    u8 = pp.chroma_denoise_flat(u8, np.asarray(im), info["noise"],
-                                                strength=min(1.2, max(0.0, info["k"] * 0.45 * s_eff)),
-                                                target_amp=None)
-                    u8 = pp.quantize8(u8, dither=args.dither)
+                    if v4_mode:
+                        # v4（A+B）：色度噪声判据 + 引导羽化，只动色度、不动亮度结构
+                        _v4 = ppv4.chroma_denoise_v4(u8, strength=args.v4_strength,
+                                                    tau=args.v4_tau, beta=args.v4_beta,
+                                                    guide_radius=args.v4_guide)
+                        u8 = pp.quantize8(_v4.astype(np.float32), dither=args.dither)
+                    else:
+                        u8 = pp.chroma_denoise_flat(u8, np.asarray(im), info["noise"],
+                                                    strength=min(1.2, max(0.0, info["k"] * 0.45 * s_eff)),
+                                                    target_amp=None)
+                        u8 = pp.quantize8(u8, dither=args.dither)
                 out_f = u8.astype(np.float32) / 255.0
                 out = out_f if args.bit16 else Image.fromarray(u8)
             elif use_post:

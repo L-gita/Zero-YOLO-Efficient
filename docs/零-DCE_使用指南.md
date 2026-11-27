@@ -311,3 +311,12 @@ python enhance.py 图.jpg --preprocess auto --auto-strength 1.0   # 旧的全强
 python enhance.py 图.jpg --preprocess auto --auto-strength 0     # 完全不做预处理与后处理（等价原版）
 python enhance.py 图.jpg --preprocess auto --auto-strength 0.25  # 更保守
 ```
+
+### 12.2 v4 原型（A+B 色度去噪）
+
+```powershell
+python enhance.py 图.jpg --preprocess v4 -c                 # 默认强度 0.9
+python enhance.py 图.jpg --preprocess v4 --v4-strength 1.3   # 更强（更干净，可能略糊）
+```
+思路：只在"色度在抖、亮度没有对应结构"的地方处理色度，并用亮度引导滤波把权重羽化，
+所以不会沿色度等值线切出人造分界线。适合"结构/轮廓比绝对干净更重要"的抓取场景。
