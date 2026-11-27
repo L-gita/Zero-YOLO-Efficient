@@ -22,7 +22,7 @@ $enh = Join-Path $repro 'enhance.py'
 $cfg = switch ($Entry) {
     'original' { @{ Title = 'Zero 原版（不加任何改进）'; DirName = 'Zero原版结果'; Args = @('-m', 'sice') } }
     'edge'     { @{ Title = '仅边缘增强版（Sobel 边缘损失）'; DirName = '边缘增强结果'; Args = @('-m', 'edge') } }
-    'mosaic'   { @{ Title = '去马赛克最终版（auto v3 预处理）'; DirName = '去马赛克最终版结果'; Args = @('--preprocess', 'auto') } }
+    'mosaic'   { @{ Title = '去马赛克最终版（场景自适应预处理）'; DirName = '去马赛克最终版结果'; Args = @('--preprocess', 'auto') } }
 }
 
 function Collect-Files($paths) {
@@ -65,7 +65,7 @@ Write-Host "共 $($files.Count) 张，输出目录：$outDir" -ForegroundColor D
 if ($Entry -eq 'edge') {
     Write-Host "  使用权重 snapshots_sice_edge\Epoch49.pth（50 轮，λ=0.22）" -ForegroundColor DarkGray
 } elseif ($Entry -eq 'mosaic') {
-    Write-Host "  auto v3：按噪声/块效应自适应去噪，只对亮度降噪，色度只在低信号平坦区平滑" -ForegroundColor DarkGray
+    Write-Host "  最终版：按噪声/块效应自适应——只对亮度降噪、去块按需、暗部补偿；不碰色度（不造色块）" -ForegroundColor DarkGray
 }
 Write-Host ""
 

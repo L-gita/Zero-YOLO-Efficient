@@ -77,4 +77,5 @@ demo_mosaic/e10_check/variantsE_*.png
 demo_mosaic/compare_ui/
 demo_mosaic/e9_check/boost/
 demo_mosaic/e9_check/sat/
-demo_mosaic/e9_check/fmt_*.png
+demo_mosaic/e9_check/fmt_*.pngdemo_mosaic/_smoke_rm/
+demo_mosaic/dither_ab/V*/
