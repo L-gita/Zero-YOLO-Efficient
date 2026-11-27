@@ -57,11 +57,21 @@ import preprocess as pp
 import preprocess_v4 as ppv4  # noqa: E402
 
 EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
+def _w(rel, backup):
+    """权重路径：优先用 Zero-DCE_code 下的训练目录；若不存在（例如换机器只 clone 了仓库），
+    回退到仓库里随代码一起提交的 weights/ 目录，保证开箱可用。"""
+    p = os.path.join(CODE, rel)
+    if os.path.exists(p):
+        return p
+    q = os.path.join(ROOT, "weights", backup)
+    return q if os.path.exists(q) else p
+
+
 MODELS = {
-    "official": os.path.join(CODE, "snapshots", "Epoch99.pth"),
-    "sice": os.path.join(CODE, "snapshots_sice", "Epoch50.pth"),
-    "edge": os.path.join(CODE, "snapshots_sice_edge", "Epoch49.pth"),   # 加论文 (4.12) Sobel 边缘损失训练的模型（50 轮）
-    "lol": os.path.join(CODE, "snapshots_run", "Epoch199.pth"),
+    "official": _w(os.path.join("snapshots", "Epoch99.pth"), "official_Epoch99.pth"),
+    "sice": _w(os.path.join("snapshots_sice", "Epoch50.pth"), "sice_Epoch50.pth"),
+    "edge": _w(os.path.join("snapshots_sice_edge", "Epoch49.pth"), "edge_Epoch49.pth"),
+    "lol": _w(os.path.join("snapshots_run", "Epoch199.pth"), "sice_Epoch49.pth"),
 }
 # 预处理预设：--preprocess 一键选
 PRESETS = {
