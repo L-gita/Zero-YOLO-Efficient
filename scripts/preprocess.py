@@ -395,6 +395,24 @@ def chroma_boost(img_rgb, ref_rgb, strength=0.6, max_gain=1.8):
 #       · 暗部轻抬只在极暗图（均值<8）启用
 #       · 近黑限增益只碰真正近黑（<2.5），且只改亮度、色度轻微拉中性；再对近黑区做一次掩码色度降噪
 # ----------------------------------------------------------------------------
+def chroma_light_strength(chroma_noise):
+    """常规分支的色度轻度平滑强度（分段，按输入色度噪声 σc）。
+
+    σc < 0.3          → 0（跳过，输出等同原版）
+    0.3 ≤ σc < 0.6    → 0.35·σc（下限 0.15；101/147/12 这类，保持现状）
+    0.6 ≤ σc < 1.0    → 0.5·σc （493=0.74、665=0.94 → 0.37/0.47）
+    σc ≥ 1.0          → 0.7·σc，上限 0.7（778=1.13 → 0.70）
+    """
+    cn = float(chroma_noise)
+    if cn < 0.3:
+        return 0.0
+    if cn < 0.6:
+        return float(max(0.15, 0.35 * cn))
+    if cn < 1.0:
+        return float(0.5 * cn)
+    return float(min(0.7, 0.7 * cn))
+
+
 def estimate_noise(rgb):
     """用暗区拉普拉斯残差的 MAD 估噪声 sigma（0~255 单位）"""
     g = cv2.cvtColor(np.asarray(rgb, dtype=np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)

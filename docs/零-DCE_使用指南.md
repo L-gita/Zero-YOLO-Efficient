@@ -309,3 +309,8 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
   `[判定] 均值 X 色度噪声 Y → skip` 与 `[light] 仅色度轻度平滑`；
 - 想强制全强度：`--auto-strength 1.0`；想完全不处理：`--auto-strength 0`；
 - 判定阈值在 `scripts/preprocess.py: auto_decision()`（色度噪声 <0.8 跳过 / <1.5 轻度 / 否则常规）。
+
+### 12.6 色度强度分段（2026-11-28）
+
+常规分支的色度平滑强度按输入色度噪声 σc 分段：<0.3 跳过；0.3~0.6 用 0.35·σc（下限 0.15）；
+0.6~1.0 用 0.5·σc；≥1.0 用 0.7·σc（上限 0.7）。想让某张图更强/更弱，可 `--chroma-mode smooth|none` 或 `--auto-strength` 手动覆盖。

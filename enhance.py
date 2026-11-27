@@ -312,7 +312,7 @@ def main():
                 if args.chroma_mode == "light":
                     _cn = pp.estimate_chroma_noise(np.asarray(im))
                     # 色度本来就很干净（<0.3）就不动，避免"越降越差"
-                    _s = 0.0 if _cn < 0.3 else float(min(0.35, max(0.15, 0.35 * _cn)))
+                    _s = float(pp.chroma_light_strength(_cn))
                     _noise = float(pp.estimate_noise(u8))
                     u8 = pp.chroma_denoise_flat(u8, np.asarray(im), _noise, strength=_s, target_amp=None)
                     u8 = pp.quantize8(np.asarray(u8, dtype=np.float32))
