@@ -486,3 +486,48 @@ def auto_preprocess(low):
         did_prelift = True
     return dict(img=x, mean=gray_mean, noise=noise, blockiness=blk, k=k,
                 deblock=did_deblock, prelift=did_prelift)
+
+
+# ---------------------------------------------------------------------------
+# E10 后处理（v2，保留细节版）：只在"低信号平坦区"做色度平滑，不动亮度、不整体去色
+# ---------------------------------------------------------------------------
+def flat_signal_mask(low, sigma, k_mean=2.0, k_std=0.7, feather=2.0):
+    """低信号平坦区掩码：局部均值低于 k_mean*sigma 且局部标准差低于 k_std*sigma。
+
+    这样"暗但有纹理"的区域（例如深色花纹布料）不会被误判成无信号区。
+    """
+    g = cv2.cvtColor(low, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    m = cv2.blur(g, (8, 8))
+    m2 = cv2.blur(g * g, (8, 8))
+    s = np.sqrt(np.maximum(m2 - m * m, 0.0))
+    mask = ((m < k_mean * max(sigma, 1e-3)) & (s < k_std * max(sigma, 1e-3))).astype(np.float32)
+    return cv2.GaussianBlur(mask, (0, 0), feather)
+
+
+def chroma_denoise_flat(img_rgb, low, sigma, strength=1.0, target_amp=None,
+                        desat=0.0, radius=5, sigma_color=18):
+    """只在"低信号平坦区"平滑色度（bilateral），并把整体色度幅度补回 target_amp。
+
+    - 不动亮度 Y：避免"深色区变黑/变灰、细节被淹"
+    - 平坦区才平滑：暗但有纹理的地方（布料花纹等）保持原样
+    - target_amp：一般传"增强后未处理图"的色度幅度，防止颜色被洗淡
+    """
+    if strength <= 0 and desat <= 0:
+        return img_rgb
+    ycc = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    m = flat_signal_mask(low, sigma) * float(np.clip(strength, 0.0, 1.5))
+    if m.max() > 0:
+        for ci in (1, 2):
+            sm = cv2.bilateralFilter(ycc[..., ci].astype(np.uint8), radius,
+                                     sigma_color, radius).astype(np.float32)
+            ycc[..., ci] = ycc[..., ci] * (1.0 - m) + sm * m
+    if desat > 0:
+        for ci in (1, 2):
+            ycc[..., ci] = ycc[..., ci] * (1.0 - desat * m) + 128.0 * (desat * m)
+    if target_amp is not None:
+        ycc = _rescale_chroma(ycc, target_amp, max_gain=1.15)
+    return cv2.cvtColor(np.clip(ycc, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
+
+def chroma_amp(img_rgb):
+    """RGB(uint8) 的色度幅度均值（供外部在不 import cv2 时调用）。"""
+    return _chroma_amp(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32))

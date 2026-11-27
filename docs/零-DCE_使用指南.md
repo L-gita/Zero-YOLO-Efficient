@@ -257,3 +257,12 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 > 对比图 `demo_mosaic/e9_check/final/compare_E9_vs_base.png`。
 
 **注意：** `--bit16` 会另存一份 `_enhanced16.png`（16 位），但微信/照片查看器会压回 8 位；用 Photoshop/GIMP 才能看到位深差别。
+
+**效果不对时怎么调（2026-11-27 更新，auto 后处理 v2）**
+
+- 觉得"深色区变黑、细节/颜色被洗淡"→ `--auto-strength 0.5`（或 `0` 完全不做后处理）
+- 觉得"还脏、马赛克还在"→ `--auto-strength 1.5`
+- 想用最保守的固定管线（只轻微降噪）→ `--preprocess light`
+- 想用旧版 E9（极端暗图很干净、但正常夜景会发灰）→ `--preprocess mosaic`
+- 输出 16bit PNG 避免 8bit 条带 → 加 `--bit16`
+

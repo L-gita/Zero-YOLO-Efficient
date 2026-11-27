@@ -70,3 +70,11 @@ scripts/copy_locked_file.py
 Zero-DCE/Zero-DCE_files/
 demo_mosaic/_smoke/
 demo_mosaic/_selftest/
+demo_mosaic/e10_check/v*/
+demo_mosaic/e10_check/v6b/
+demo_mosaic/e10_check/variants*/
+demo_mosaic/e10_check/variantsE_*.png
+demo_mosaic/compare_ui/
+demo_mosaic/e9_check/boost/
+demo_mosaic/e9_check/sat/
+demo_mosaic/e9_check/fmt_*.png

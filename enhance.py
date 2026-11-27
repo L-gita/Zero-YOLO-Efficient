@@ -189,6 +189,8 @@ def main():
                     help="近黑区中性抬亮的 gamma（越大越暗；0.55=默认，1.0=几乎不提亮）")
     ap.add_argument("--dark-smooth", type=int, default=8,
                     help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
+    ap.add_argument("--auto-strength", type=float, default=1.0,
+                    help="auto 模式下后处理强度总开关（0=不处理、1=默认、>1 更强；怀疑伤细节时调小）")
     ap.add_argument("--dither", type=float, default=0.6,
                     help="输出 8bit 前的抖动强度（抑制条带；0.6≈0.6 个灰度级）")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
@@ -269,10 +271,21 @@ def main():
             if auto_mode:
                 u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
                 info = pp.auto_preprocess(np.asarray(im))
-                if info["mean"] < 20.0:      # 正常亮度的图不做后处理，避免发灰/发糊
-                    u8 = pp.limit_dark_luma(u8, np.asarray(im), thr=2.5, feather=3.0,
-                                            gamma=args.dark_gamma, strength=0.9, chroma_k=0.85)
-                    u8 = pp.masked_chroma_denoise(u8, np.asarray(im), thr=6.0, strength=2.2)
+                # E10 后处理 v2（分两档）：
+                #   mean<5 的"几乎全黑"图：走中性抬亮（E9 路线，抑制彩色大斑）
+                #   其余暗图：只在"低信号平坦区"平滑色度，不动亮度（保留深色区细节与颜色）
+                if info["mean"] < 5.0:
+                    # 几乎全黑：走 E9 路线（引导平滑 → 平滑亮度中性抬亮 → 抖动量化）
+                    u8 = pp.chroma_guided_smooth(u8, luma_guide=u8, radius=2, eps=1e-3, strength=0.5 * args.auto_strength)
+                    u8 = pp.quantize8(pp.limit_dark_gain(
+                        u8, np.asarray(im), l0=3.0, l1=12.0, gamma=args.dark_gamma,
+                        strength=0.80 * args.auto_strength, smooth_radius=args.dark_smooth, dither=0.0),
+                        dither=args.dither)
+                else:
+                    amp_ref = pp.chroma_amp(u8)
+                    u8 = pp.chroma_denoise_flat(u8, np.asarray(im), info["noise"],
+                                                strength=min(1.5, max(0.0, info["k"] * 0.7 * args.auto_strength)),
+                                                target_amp=amp_ref * 0.98)
                     u8 = pp.quantize8(u8, dither=args.dither)
                 out_f = u8.astype(np.float32) / 255.0
                 out = out_f if args.bit16 else Image.fromarray(u8)
