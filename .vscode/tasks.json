@@ -1,0 +1,123 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "0 环境自检（Python + torch + CUDA）",
+      "detail": "确认解释器、torch 版本和 GPU 可用",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "-c",
+        "import sys,torch;print('Python',sys.version.split()[0]);print('torch',torch.__version__);print('CUDA available:',torch.cuda.is_available());print('GPU:',torch.cuda.get_device_name(0) if torch.cuda.is_available() else '(none)')"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "1 推理：官方权重跑 LIME+DICM（约 8 秒）",
+      "detail": "执行 lowlight_test.py，结果写到 data\\result\\",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": ["lowlight_test.py"],
+      "options": { "cwd": "${workspaceFolder}\\Zero-DCE\\Zero-DCE_code" },
+      "problemMatcher": [],
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "2 推理：用我自己训练的 SICE 权重增强测试集",
+      "detail": "不覆盖官方结果，输出到 enhanced_results\\",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": ["enhance.py", "Zero-DCE\\Zero-DCE_code\\data\\test_data", "-m", "sice", "-o", "enhanced_results", "-c"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "3 训练冒烟：2 轮（约 20 秒，先确认能跑）",
+      "detail": "用官方脚本小规模跑 2 轮，检查 loss 是否下降",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": ["lowlight_train.py", "--num_workers", "0", "--num_epochs", "2", "--snapshots_folder", "snapshots_smoke/"],
+      "options": { "cwd": "${workspaceFolder}\\Zero-DCE\\Zero-DCE_code" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "4 正式训练：SICE 2002 张，100 轮（约 45~60 分钟）",
+      "detail": "权重存到 snapshots_mine\\，不会覆盖已训练好的 snapshots_sice\\",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "lowlight_train.py",
+        "--lowlight_images_path", "data/train_data_sice/",
+        "--num_workers", "0",
+        "--num_epochs", "100",
+        "--snapshots_folder", "snapshots_mine/"
+      ],
+      "options": { "cwd": "${workspaceFolder}\\Zero-DCE\\Zero-DCE_code" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "5 评测：485 对 LOL 图上算 PSNR/SSIM（约 3~4 分钟）",
+      "detail": "对比官方权重与我们训练的各轮权重",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": ["scripts\\eval_lol.py"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "N": "0",
+          "CKPTS": "snapshots/Epoch99.pth;snapshots_sice/Epoch50.pth;snapshots_run/Epoch199.pth"
+        }
+      },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "6 增强我自己的照片（弹窗选图）",
+      "detail": "选完图后结果放在图片旁边，并自动弹出文件夹",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}\\pick_and_enhance.ps1"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "7 训练：加论文(4.12) Sobel 边缘损失（λ=0.22，50 轮，约 25 分钟）",
+      "detail": "权重存到 snapshots_sice_edge\\，不覆盖 snapshots_sice\\；日志同时打印 base 与 edge 两项",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "lowlight_train.py",
+        "--lowlight_images_path", "data/train_data_sice/",
+        "--num_workers", "0",
+        "--num_epochs", "50",
+        "--snapshots_folder", "snapshots_sice_edge/",
+        "--edge_weight", "0.22"
+      ],
+      "options": { "cwd": "${workspaceFolder}\\Zero-DCE\\Zero-DCE_code" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    },
+    {
+      "label": "8 对比：基线 vs 加边缘损失（输出 demo_edge\\）",
+      "detail": "同一张图并排输出 低照输入 | GT | 基线 | +边缘损失，并算 PSNR/SSIM/梯度幅值",
+      "type": "shell",
+      "command": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "args": [
+        "scripts\\compare_models.py",
+        "--base", "Zero-DCE\\Zero-DCE_code\\snapshots_sice\\Epoch49.pth",
+        "--edge", "Zero-DCE\\Zero-DCE_code\\snapshots_sice_edge\\Epoch49.pth",
+        "--tag", "ep49_edge022"
+      ],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true }
+    }
+  ]
+}

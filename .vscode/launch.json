@@ -1,0 +1,37 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "调试：官方测试脚本（lowlight_test.py）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\Zero-DCE\\Zero-DCE_code\\lowlight_test.py",
+      "cwd": "${workspaceFolder}\\Zero-DCE\\Zero-DCE_code",
+      "console": "integratedTerminal",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "justMyCode": true
+    },
+    {
+      "name": "调试：训练冒烟 2 轮（lowlight_train.py）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\Zero-DCE\\Zero-DCE_code\\lowlight_train.py",
+      "args": ["--num_workers", "0", "--num_epochs", "2", "--snapshots_folder", "snapshots_smoke/"],
+      "cwd": "${workspaceFolder}\\Zero-DCE\\Zero-DCE_code",
+      "console": "integratedTerminal",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "justMyCode": true
+    },
+    {
+      "name": "调试：增强自己的照片（enhance.py，参数在向导里填）",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}\\enhance.py",
+      "args": ["--help"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+      "justMyCode": true
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+# ============================================================
+# Zero-DCE 复现 + 边缘损失改进  ——  .gitignore
+# 原则：只跟踪「代码 / 脚本 / 文档 / 关键权重 / 关键图表」，
+#       大数据集、训练中间产物、环境目录一律不进仓库。
+# ============================================================
+
+# ---------- 环境与安装包（体积大，可重装/重新下载） ----------
+.venv/
+py311/
+PortableGit/
+PortableGit.exe
+py311.tar.gz
+wheels/
+installers/
+*.exe
+*.zip
+*.tar.gz
+
+# ---------- 数据与第三方克隆仓库（可重新 clone / 下载） ----------
+lol_repo/
+sice_repo/
+lol_test/
+低照图库/
+compare/
+demo_pairs/
+demo_ab/
+demo_bat/
+demo_pairs_check/
+enhanced_results/
+enhanced_test/
+tmp_asar/
+tmp_asar2/
+plugin_backup/
+_archive/
+
+# ---------- 训练中间产物（体积大，可由命令重新生成） ----------
+Zero-DCE/Zero-DCE_code/data/train_data/
+Zero-DCE/Zero-DCE_code/data/train_high/
+Zero-DCE/Zero-DCE_code/data/train_data_sice/
+Zero-DCE/Zero-DCE_code/data/result/
+Zero-DCE/Zero-DCE_code/snapshots_run/
+Zero-DCE/Zero-DCE_code/snapshots_sice/
+Zero-DCE/Zero-DCE_code/snapshots_sice_edge/
+Zero-DCE/Zero-DCE_code/snapshots_mine*/
+
+# ---------- 日志 ----------
+*.log
+sidebar_fix_log.txt
+
+# ---------- 演示产物：只保留关键图，忽略逐图大图 ----------
+demo_edge/_selftest/
+demo_edge/ep49_edge022/*.png
+!demo_edge/ep49_edge022/overview_*.png
+!demo_edge/ep49_edge022/zoom/*.png
+
+# ---------- Python 缓存 ----------
+__pycache__/
+*.pyc
+
+# ---------- 本机环境修复用的一次性脚本（与论文无关） ----------
+回滚旧插件.bat
+重启DSH并验证.bat
+sys311_install.log
+scripts/apply_sidebar_fix.ps1
+scripts/find_dsh_token.py
+scripts/read_dsh_cookies.py
+scripts/copy_locked_file.py
+
+# ---------- 官方仓库网页快照（非代码） ----------
+Zero-DCE/Zero-DCE_files/

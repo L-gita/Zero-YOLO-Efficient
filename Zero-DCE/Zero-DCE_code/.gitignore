@@ -1,0 +1,6 @@
+__pycache__/
+
+# 官方仓库原本整体忽略 data/；本项目只保留“官方测试集”（LIME 10 张 + DICM 64 张，共 30 MB），
+# 训练集 / 结果目录仍由根目录 .gitignore 忽略（可由 scripts/prepare_data.py 重新生成）。
+data/*
+!data/test_data/
