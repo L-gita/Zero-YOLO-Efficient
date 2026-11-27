@@ -1,6 +1,10 @@
 ﻿# 保存到 Git：查看改动 → 输入说明 → 提交 →（若已配置远程）推送
 # 由 保存到Git.bat 调用。本文件必须以 UTF-8 with BOM 保存，否则 PS 5.1 读中文会乱码。
 
+# 让控制台按 UTF-8 显示中文（否则双击运行时中文提示是乱码）
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
