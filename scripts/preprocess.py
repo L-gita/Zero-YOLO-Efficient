@@ -467,24 +467,30 @@ def limit_dark_luma(enh, low, thr=2.5, feather=3.0, gamma=0.60, strength=0.9, ch
     return cv2.cvtColor(np.clip(e, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
 
 
-def auto_preprocess(low):
-    """E10 场景自适应预处理（返回 dict：预处理图 + 决策信息）"""
+def auto_preprocess(low, strength=1.0):
+    """E10 场景自适应预处理（返回 dict：预处理图 + 决策信息）
+
+    strength: 全局强度 0~1+（--auto-strength）。会同时作用在
+              去块 / 亮度降噪 / 轻抬 上，0 = 完全不做预处理（等价原版）。
+    """
     low = np.asarray(low, dtype=np.uint8)
+    s = float(max(0.0, strength))
     gray_mean = float(cv2.cvtColor(low, cv2.COLOR_RGB2GRAY).mean())
     noise = estimate_noise(low)
     blk = estimate_blockiness(low)
     k = float(np.clip(noise / 2.0, 0.35, 1.6))
     x = low
     did_deblock = False
-    if blk > 1.03:
-        x = deblock(x, strength=min(1.0, (blk - 1.0) * 6.0))
+    if blk > 1.03 and s > 0:
+        x = deblock(x, strength=min(1.0, (blk - 1.0) * 6.0) * s)
         did_deblock = True
     # 只对亮度做轻度降噪：色度降噪留给"增强后、低信号平坦区"（在输入上动色度会造成偏色，
     # 因为 Zero-DCE 的曲线是逐通道独立的，输入色度一变，输出颜色就跟着偏）
-    x = luma_denoise(x, h=0.8 + 0.15 * k)
+    if s > 0:
+        x = luma_denoise(x, h=(0.8 + 0.15 * k) * s)
     did_prelift = False
-    if gray_mean < 4.0:      # 只有"几乎全黑"才轻抬，避免正常暗图被抬亮后变淡
-        x = prelift(x, amount=0.08)
+    if gray_mean < 4.0 and s > 0:      # 只有"几乎全黑"才轻抬，避免正常暗图被抬亮后变淡
+        x = prelift(x, amount=0.08 * s)
         did_prelift = True
     return dict(img=x, mean=gray_mean, noise=noise, blockiness=blk, k=k,
                 deblock=did_deblock, prelift=did_prelift)

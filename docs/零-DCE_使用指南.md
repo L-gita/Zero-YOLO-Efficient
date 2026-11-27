@@ -300,3 +300,14 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 - 三个入口都不含「边缘损失 + 马赛克预处理」的组合版；需要更强去噪可用命令行 `--preprocess dark`，想调轻用 `--auto-strength 0.5`。
 - 大图（>6 MP）自动分块推理，12 MP 约 11 s。
 - 想对比两个版本：`python scripts\compare_preprocess.py 原图 改进图`，或 `enhance.py -c` 生成左右对比。
+
+### 12.1 默认已是"保守档"（2026-11-27）
+
+`--preprocess auto` 默认 `--auto-strength -1`：普通暗图自动用 0.45（保纹理、少出大片色块），
+近黑图（均值<5）自动用 1.0（压彩色斑）。想手调：
+
+```powershell
+python enhance.py 图.jpg --preprocess auto --auto-strength 1.0   # 旧的全强度（更干净但更平滑）
+python enhance.py 图.jpg --preprocess auto --auto-strength 0     # 完全不做预处理与后处理（等价原版）
+python enhance.py 图.jpg --preprocess auto --auto-strength 0.25  # 更保守
+```

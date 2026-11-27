@@ -194,8 +194,8 @@ def main():
                     help="近黑区中性抬亮的 gamma（越大越暗；0.55=默认，1.0=几乎不提亮）")
     ap.add_argument("--dark-smooth", type=int, default=8,
                     help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
-    ap.add_argument("--auto-strength", type=float, default=1.0,
-                    help="auto 模式下后处理强度总开关（0=不处理、1=默认、>1 更强；怀疑伤细节时调小）")
+    ap.add_argument("--auto-strength", type=float, default=-1.0,
+                    help="auto 模式的总强度；-1=保守自动（普通暗图 0.45、近黑图 1.0），1.0=原 auto v3 全强度，0=完全等价原版，也可给 0~2 之间的数")
     ap.add_argument("--dither", type=float, default=0.6,
                     help="输出 8bit 前的抖动强度（抑制条带；0.6≈0.6 个灰度级）")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
@@ -261,7 +261,13 @@ def main():
             # ① 增强前的预处理：auto=场景自适应（E10），否则按手动/旧预设参数
             pre = im
             if auto_mode:
-                info = pp.auto_preprocess(np.asarray(im))
+                # 保守自动：普通暗图用 0.45（保纹理、少造线），近黑图（均值<5）才用 1.0（压彩色大斑）
+                if args.auto_strength < 0:
+                    _m = float(np.mean(np.asarray(im.convert("L"), dtype=np.float32)))
+                    s_eff = 1.0 if _m < 5.0 else 0.45
+                else:
+                    s_eff = args.auto_strength
+                info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
                 pre = Image.fromarray(info["img"])
                 print(f"    [auto] 均值 {info['mean']:5.1f}  噪声σ {info['noise']:4.2f}  "
                       f"块效应 {info['blockiness']:.3f} → 降噪×{info['k']:.2f}  "
@@ -275,21 +281,21 @@ def main():
             # ③ 增强后的处理：auto=近黑限增益（只动亮度）+ 近黑区掩码色度降噪；否则用旧逻辑
             if auto_mode:
                 u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
-                info = pp.auto_preprocess(np.asarray(im))
+                info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
                 # E10 后处理 v2（分两档）：
                 #   mean<5 的"几乎全黑"图：走中性抬亮（E9 路线，抑制彩色大斑）
                 #   其余暗图：只在"低信号平坦区"平滑色度，不动亮度（保留深色区细节与颜色）
                 if info["mean"] < 5.0:
                     # 几乎全黑：走 E9 路线（引导平滑 → 平滑亮度中性抬亮 → 抖动量化）
-                    u8 = pp.chroma_guided_smooth(u8, luma_guide=u8, radius=2, eps=1e-3, strength=0.5 * args.auto_strength)
+                    u8 = pp.chroma_guided_smooth(u8, luma_guide=u8, radius=2, eps=1e-3, strength=0.5 * s_eff)
                     u8 = pp.quantize8(pp.limit_dark_gain(
                         u8, np.asarray(im), l0=3.0, l1=12.0, gamma=args.dark_gamma,
-                        strength=0.80 * args.auto_strength, smooth_radius=args.dark_smooth, dither=0.0),
+                        strength=0.80 * s_eff, smooth_radius=args.dark_smooth, dither=0.0),
                         dither=args.dither)
                 else:
                     amp_ref = pp.chroma_amp(u8)
                     u8 = pp.chroma_denoise_flat(u8, np.asarray(im), info["noise"],
-                                                strength=min(1.2, max(0.0, info["k"] * 0.45 * args.auto_strength)),
+                                                strength=min(1.2, max(0.0, info["k"] * 0.45 * s_eff)),
                                                 target_amp=None)
                     u8 = pp.quantize8(u8, dither=args.dither)
                 out_f = u8.astype(np.float32) / 255.0
