@@ -1,4 +1,4 @@
-"""基线 vs 去马赛克(auto / E9) 三列对比：输入 | 基线增强 | 去马赛克增强
+"""原版 vs 去噪版 三列对比：原图 | 原版 Zero-DCE | 去噪版（auto 预处理）
 用法：
     python scripts\\compare_preprocess.py 图片或文件夹... [-o 输出目录] [--mode auto|mosaic] [--zoom 3]
 会为每张图输出 xxx_对比.png（上排三列 + 下排 3× 局部放大）与 metrics.csv / summary.md
@@ -97,7 +97,7 @@ def main():
     files = collect(args.inputs)
     if not files:
         raise SystemExit("没有找到图片")
-    out_dir = args.out or os.path.join(os.path.dirname(files[0]), "对比结果_基线vs去马赛克")
+    out_dir = args.out or os.path.join(os.path.dirname(files[0]), "对比_原版vs去噪")
     os.makedirs(out_dir, exist_ok=True)
 
     net = load_net()
@@ -122,7 +122,7 @@ def main():
                                               strength=min(1.0, max(0.2, info["k"] * 0.45)),
                                               target_amp=None)
                 enh2 = pp.quantize8(enh2, dither=0.4)
-            tag = "auto(E10)"
+            tag = "去噪版"
         else:
             pre = pp.preprocess(rgb, denoise=0.5, deblock_strength=0.5, prelift_amount=0.10)
             e = enhance(net, pre)
@@ -130,14 +130,14 @@ def main():
             e = pp.limit_dark_gain(e, rgb, l0=3.0, l1=12.0, gamma=0.55, strength=0.80,
                                    smooth_radius=8, dither=0.6)
             enh2 = pp.quantize8(e, dither=0.6)
-            tag = "E9"
+            tag = "去噪版(E9)"
 
         stem = os.path.splitext(os.path.basename(f))[0]
         x0, y0, bw, bh = zoom_box(rgb)
         panels = []
         for t, img in ((f"低照输入  亮度{rgb.mean():.1f}", rgb),
-                       (f"基线 Zero-DCE  亮度{base.mean():.1f}", base),
-                       (f"去马赛克 {tag}  亮度{enh2.mean():.1f}", enh2)):
+                       (f"原版 Zero-DCE  亮度{base.mean():.1f}", base),
+                       (f"{tag}  亮度{enh2.mean():.1f}", enh2)):
             h, w = img.shape[:2]
             tw = 460
             r = Image.fromarray(img).resize((tw, max(50, int(tw * h / w))), Image.LANCZOS)
@@ -153,7 +153,7 @@ def main():
             x += a.shape[1]
 
         zs = []
-        for t, img in (("输入", rgb), ("基线", base), ("去马赛克", enh2)):
+        for t, img in (("原图", rgb), ("原版", base), ("去噪", enh2)):
             crop = img[y0:y0 + bh, x0:x0 + bw]
             z = cv2.resize(crop, None, fx=args.zoom, fy=args.zoom, interpolation=cv2.INTER_NEAREST)
             c = Image.new("RGB", (z.shape[1], z.shape[0] + 30), (26, 26, 26))
@@ -193,7 +193,7 @@ def main():
         def avg(k):
             return float(np.mean([r[k] for r in rows]))
         lines = [
-            "# 基线 vs 去马赛克 对比",
+            "# 原版 vs 去噪版 对比",
             "",
             f"共 {len(rows)} 张，模式 `{rows[0]['mode']}`。逐图看 `*_对比.png`（上排全图、下排 3× 局部）。",
             "",
@@ -204,7 +204,7 @@ def main():
             f"| 暗区条带跳变 | {avg('band_base'):.1f} | **{avg('band_out'):.1f}** |",
             f"| 平均亮度 | {avg('bright_base'):.1f} | {avg('bright_out'):.1f} |",
             "",
-            "读法：色噪越低越干净；std8 越接近基线说明细节保留得越好；条带跳变越小说明灰块/色阶越少。",
+            "读法：色噪越低越干净；std8 越接近原版说明细节保留得越好；条带跳变越小说明灰块/色阶越少。",
         ]
         with open(os.path.join(out_dir, "summary.md"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(lines))
