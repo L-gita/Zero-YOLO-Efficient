@@ -75,25 +75,31 @@ python lowlight_test.py
 
 ## 3.5 增强自己的照片（日常用法）
 
-**双击** `C:\Users\12983\Documents\repro\增强我的照片.bat` → 选图 → 结果在图片旁的 `增强结果_原版与edge` 文件夹，
-**一次同时生成原版增强与 edge 版增强两张图**（每张图 4 个文件）：
-`xxx_原版增强.png`（原版 Zero-DCE）、`xxx_edge增强.png`（加边缘损失）、`xxx_AB对比.png`（原图|原版|edge + 局部放大）、
-`xxx_指标.png`（亮度/M/L_edge/cos/corr 柱状）；另有 `overview_AB.png`、`metrics.csv`、`summary.md`。
-也可以把照片/文件夹直接**拖到该 bat 上**。只要一个版本时用 `只要原版增强.bat` / `只要edge增强.bat`。
+根目录只有三个版本入口，双击或把照片/文件夹拖上去即可（详见 §10）：
+
+| bat | 版本 | 输出目录 |
+| --- | --- | --- |
+| `1_Zero原版.bat` | Zero 原版（不加任何改进） | `Zero原版结果\` |
+| `2_边缘增强版.bat` | 只有边缘增强（Sobel 边缘损失） | `边缘增强结果\` |
+| `3_去马赛克最终版.bat` | 去马赛克最终版（auto v3 预处理） | `去马赛克最终版结果\` |
+
+每张图出两个文件：`xxx_enhanced.png`（成片）、`xxx_compare.png`（左右对比）。
 
 命令行方式：
 
 ```powershell
 $py = "C:\Users\12983\Documents\repro\.venv\Scripts\python.exe"
-# 两个版本一起出（公平对比：两个权重同为 50 轮）
-& $py C:\Users\12983\Documents\repro\scripts\ab_enhance_compare.py "D:\照片" -o "D:\AB结果"
-# 只要单个版本
-& $py C:\Users\12983\Documents\repro\enhance.py "D:\照片" -o "D:\增强结果" -c -m sice
+# Zero 原版
+& $py C:\Users\12983\Documents\repro\enhance.py "D:\照片" -o "D:\结果" -c -m sice
+# 边缘增强版
+& $py C:\Users\12983\Documents\repro\enhance.py "D:\照片" -o "D:\结果" -c -m edge
+# 去马赛克最终版（auto v3）
+& $py C:\Users\12983\Documents\repro\enhance.py "D:\照片" -o "D:\结果" -c --preprocess auto
 ```
 
-`-m` 可选 `sice`（默认，推荐）/ `edge`（加边缘损失）/ `official`（作者权重，更保守）/ `lol`（过曝对照）。
+`-m` 可选 `sice`（默认）/ `edge` / `official`（作者权重，更保守）/ `lol`（过曝对照）。
 详细说明见 `..\..\deepseek-harness\default-workspace\零-DCE_使用指南.md`。
-12MP 手机照约 27 秒/张，小图 0.05~0.3 秒；显存不够会自动降级 fp16 或分块。
+12MP 手机照约 27 秒/张（自动分块），小图 0.05~0.6 秒。
 
 ## 4. 从零训练
 
@@ -355,7 +361,7 @@ v1 直接拿 8-bit 量化后的亮度去做中性 gamma 映射，输入只有几
 ## 9. 2026-11-27 修订：auto v3（修正“偏绿 / 噪点多”，并修好大图 OOM）
 
 **问题**：用户反馈 493 那张玩偶图（eval15/493.png）用 `--preprocess auto` 后整体偏绿、噪点多；
-另外用 `对比_基线vs去马赛克.bat` 处理手机大图时报 `torch.OutOfMemoryError: ... 12.14 GiB is allocated by PyTorch`。
+另外用旧的对比 bat 处理手机大图时报 `torch.OutOfMemoryError: ... 12.14 GiB is allocated by PyTorch`。
 
 **偏绿根因**（实测 Lab 色度）：
 - 在**输入上做色度降噪**（`denoise_chroma`）会让输出 Lab `a*` 从 **+3.67 → −0.75**（绿移 4.4 个单位）。
@@ -391,21 +397,30 @@ python scripts\compare_preprocess.py 你的图.png -o 对比结果
 python enhance.py 你的图.png --preprocess auto -c -o 增强结果
 ```
 
-## 10. 三个一键入口（拖拽 / 双击都行，2026-11-27）
+## 10. 三个版本入口（2026-11-27 整理后：根目录只剩这 3 个 bat）
 
-| 入口（双击运行） | 作用 | 输出目录（在第一张图旁边） | 每张产物 |
+| 入口（双击 / 拖拽） | 是什么 | 输出目录（在第一张图旁边） | 每张产物 |
 | --- | --- | --- | --- |
-| `原版增强.bat` | **原版 Zero-DCE**，不做任何预处理 | `原版增强结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
-| `去噪增强.bat` | **去噪版**：`--preprocess auto`（按噪声/块效应自适应去噪、去块、近黑处理） | `去噪增强结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
-| `对比_原版vs去噪.bat` | **两者对比**：原图 / 原版 / 去噪版 三列 + 同区域 3× 放大 | `对比_原版vs去噪\` | `xxx_对比.png` + `metrics.csv` + `summary.md` |
+| `1_Zero原版.bat` | **Zero 原版**：原始 Zero-DCE，不加任何改进（`-m sice`） | `Zero原版结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
+| `2_边缘增强版.bat` | **只有边缘增强**：论文 (4.9)~(4.12) 的 Sobel 边缘损失权重（`-m edge`），不含马赛克预处理 | `边缘增强结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
+| `3_去马赛克最终版.bat` | **去马赛克最终版** = 之前说的 **auto v3**（`--preprocess auto`），不含边缘损失 | `去马赛克最终版结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
+
+> **名词对照（同一个东西的几种叫法）**：
+> `去噪增强` = `去马赛克增强` = `--preprocess auto` = `auto v3` = 现在的 **`去马赛克最终版`**。
+> 「边缘增强版」是另一条线：只加 Sobel 边缘损失、不做去马赛克预处理；两者互不包含。
 
 用法（三选一）：
-1. **拖拽**：把照片（或整个文件夹）拖到对应的 `.bat` 图标上，松手即可；
-2. **双击**：弹出选图窗口，按住 Ctrl 可多选；
-3. **命令行**：`"C:\...\repro\去噪增强.bat" "D:\照片\a.jpg" "D:\照片\b.jpg"`
+1. **拖拽**：把照片（或整个文件夹）拖到对应的 `.bat` 图标上松手；
+2. **双击**：弹选图窗口，按住 Ctrl 可多选；
+3. **命令行**：`"C:\Users\12983\Documents\repro\3_去马赛克最终版.bat" "D:\照片\a.jpg"`
+
+文件夹整理（2026-11-27）：
+- 根目录现在**只有这 3 个版本 bat**；
+- `工具\`：`保存到Git.bat`、`推送到GitHub.bat`、`推送到GitHub_输入token.bat`、`open_vscode.bat`；
+- `_archive\旧入口_20261127\`：旧版各种 bat（原版增强、去噪增强、对比、增强我的照片、旧 E9、回滚插件等），要用还能翻出来；
+- 三个入口的统一实现：`scripts\entry.ps1`（旧的 `scripts\three_entries.ps1` 已归档）。
 
 说明：
-- 三个入口都**不含**之前的边缘损失（`-m edge` / `--edge_weight`），是干净的原版 vs 去噪版；边缘损失以后要加随时能加。
-- 大图（>6 MP）会自动分块，12 MP 约 11 s；统一实现在 `scripts\three_entries.ps1`。
-- 旧的 `去马赛克增强.bat`、`对比_基线vs去马赛克.bat`、`增强我的照片.bat` 仍保留（后者会同时出边缘损失那版），新三个入口是推荐用法。
-
+- 三个入口都不含「边缘损失 + 马赛克预处理」的组合版；需要更强去噪可用命令行 `--preprocess dark`，想调轻用 `--auto-strength 0.5`。
+- 大图（>6 MP）自动分块推理，12 MP 约 11 s。
+- 想对比两个版本：`python scripts\compare_preprocess.py 原图 改进图`，或 `enhance.py -c` 生成左右对比。

@@ -10,12 +10,12 @@
 | 代码 | `C:\Users\12983\Documents\repro\Zero-DCE\Zero-DCE_code` | 官方 Zero-DCE，已改成 Windows 能跑 |
 | 权重 | 同上目录下 `snapshots\Epoch99.pth`（官方）、`snapshots_sice\Epoch50.pth`（我训的，推荐） | 真正决定效果的模型 |
 | 一键脚本 | `C:\Users\12983\Documents\repro\enhance.py` | 我新写的，专门给你用自己的照片 |
-| 双击入口 | `C:\Users\12983\Documents\repro\增强我的照片.bat` | 图形化选图，**一次出「原版增强 + edge 增强」两版** |
-| 单版本入口 | `C:\Users\12983\Documents\repro\只要原版增强.bat` / `只要edge增强.bat` | 只要某一个版本时用 |
+| 三个版本入口 | `1_Zero原版.bat` / `2_边缘增强版.bat` / `3_去马赛克最终版.bat` | 见 §13，日常用这个 |
+| 三个版本入口 | `1_Zero原版.bat` / `2_边缘增强版.bat` / `3_去马赛克最终版.bat` | 见 §13 |
 
 ## 1. 最省事：双击 → 选图 → 看结果（一次出两个版本）
 
-1. 打开 `C:\Users\12983\Documents\repro\`，双击 **`增强我的照片.bat`**；
+1. 打开 `C:\Users\12983\Documents\repro\`，双击 **`3_去马赛克最终版.bat`**（或另外两个版本入口）；
 2. 弹出选图窗口，按住 `Ctrl` 可以多选（一次几十张也行），也可以直接把照片/文件夹拖到 bat 上；
 3. 点"打开"，黑窗口里会跑进度（每张 0.1~27 秒不等，见下文）；
 4. 跑完会自动弹出结果文件夹 `增强结果_原版与edge\`，**每张图 4 个文件**：
@@ -34,17 +34,17 @@
 
 ## 2. 拖拽：把照片拖到 bat 上
 
-把一张、多张照片，或者**整个文件夹**拖到 `增强我的照片.bat` 图标上松手，就会自动跑完并弹出结果目录，
+把一张、多张照片，或者**整个文件夹**拖到 `1_Zero原版.bat` / `2_边缘增强版.bat` / `3_去马赛克最终版.bat` 图标上松手，就会自动跑完并弹出结果目录，
 **一次同时生成原版增强和 edge 版增强两张图**（外加 AB 对比图与指标图）。
 （拖文件夹会递归处理里面所有 jpg/png/bmp/tif/webp。）
 
 只要其中一个版本时，拖到对应的 bat：
-- `只要原版增强.bat` → 只出 `xxx_enhanced.png`（原版）+ `xxx_compare.png`
-- `只要edge增强.bat` → 只出 edge 版 + 左右对比图
+- `1_Zero原版.bat` → 只出 `xxx_enhanced.png`（原版）+ `xxx_compare.png`
+- `2_边缘增强版.bat` → 只出边缘增强版 + 左右对比图
 
 ### 2.1 想把 bat 放到桌面用（必须改绝对路径）
 
-repro 里的 bat 用 `%~dp0` 找 `pick_and_enhance.ps1`，**单独复制到桌面就打不开**
+repro 里的 bat 用 `%~dp0` 找 `scripts\entry.ps1`，**单独复制到桌面就打不开**（要连同 repro 一起用）
 （`%~dp0` 变成桌面，ps1 不在那儿，窗口闪一下就关）。桌面版要把路径写死：
 
 ```bat
@@ -53,10 +53,10 @@ chcp 65001 >nul
 setlocal
 set "REPRO=C:\Users\12983\Documents\repro"
 set "ZERODCE_MODE=base"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%REPRO%\pick_and_enhance.ps1" %*
+powershell -NoProfile -ExecutionPolicy Bypass -File "%REPRO%\scripts\entry.ps1" %*
 ```
 
-`pick_and_enhance.ps1` 是用 `$MyInvocation.MyCommand.Path` 反推 `.venv\Scripts\python.exe`
+`entry.ps1` 是用 `$PSScriptRoot` 反推 `.venv\Scripts\python.exe`
 和 `enhance.py` 的，所以**它必须留在 repro 目录里**，桌面只放 bat。
 `ZERODCE_MODE` 三档：`both`（默认，一次出原版+edge+AB+指标）、`base`（只原版）、`edge`（只 edge）。
 repro 搬到别处时只改 `REPRO=` 一行。
@@ -273,14 +273,30 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 - **大图（>6 MP）** 自动分块，12 MP 约 11 s；内存不够不会再报 CUDA OOM
 - 预处理阶段只对**亮度**降噪（不碰输入色度），色度降噪只在增强后的“低信号平坦区”做 → 不会再整体偏绿
 
-## 13. 三个一键入口（2026-11-27，推荐用法）
+## 13. 三个版本入口（2026-11-27 整理后：根目录只剩这 3 个 bat）
 
-| 双击这个 bat | 做什么 | 输出在哪 |
-| --- | --- | --- |
-| `原版增强.bat` | 原版 Zero-DCE（无预处理） | 第一张图旁 `原版增强结果\` |
-| `去噪增强.bat` | 去噪版（`--preprocess auto`，自适应去噪） | 第一张图旁 `去噪增强结果\` |
-| `对比_原版vs去噪.bat` | 三列对比 + 3× 放大 + 指标表 | 第一张图旁 `对比_原版vs去噪\` |
+| 入口（双击 / 拖拽） | 是什么 | 输出目录（在第一张图旁边） | 每张产物 |
+| --- | --- | --- | --- |
+| `1_Zero原版.bat` | **Zero 原版**：原始 Zero-DCE，不加任何改进（`-m sice`） | `Zero原版结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
+| `2_边缘增强版.bat` | **只有边缘增强**：论文 (4.9)~(4.12) 的 Sobel 边缘损失权重（`-m edge`），不含马赛克预处理 | `边缘增强结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
+| `3_去马赛克最终版.bat` | **去马赛克最终版** = 之前说的 **auto v3**（`--preprocess auto`），不含边缘损失 | `去马赛克最终版结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
 
-- 拖拽照片/文件夹到 bat 上即可；双击则弹窗选图（Ctrl 多选）。
-- 三个入口都不含边缘损失；以后要加就用 `--edge_weight`（训练）/ `-m edge`（推理）。
-- 大图自动分块（12 MP ≈ 11 s），不会再报 CUDA OOM。
+> **名词对照（同一个东西的几种叫法）**：
+> `去噪增强` = `去马赛克增强` = `--preprocess auto` = `auto v3` = 现在的 **`去马赛克最终版`**。
+> 「边缘增强版」是另一条线：只加 Sobel 边缘损失、不做去马赛克预处理；两者互不包含。
+
+用法（三选一）：
+1. **拖拽**：把照片（或整个文件夹）拖到对应的 `.bat` 图标上松手；
+2. **双击**：弹选图窗口，按住 Ctrl 可多选；
+3. **命令行**：`"C:\Users\12983\Documents\repro\3_去马赛克最终版.bat" "D:\照片\a.jpg"`
+
+文件夹整理（2026-11-27）：
+- 根目录现在**只有这 3 个版本 bat**；
+- `工具\`：`保存到Git.bat`、`推送到GitHub.bat`、`推送到GitHub_输入token.bat`、`open_vscode.bat`；
+- `_archive\旧入口_20261127\`：旧版各种 bat（原版增强、去噪增强、对比、增强我的照片、旧 E9、回滚插件等），要用还能翻出来；
+- 三个入口的统一实现：`scripts\entry.ps1`（旧的 `scripts\three_entries.ps1` 已归档）。
+
+说明：
+- 三个入口都不含「边缘损失 + 马赛克预处理」的组合版；需要更强去噪可用命令行 `--preprocess dark`，想调轻用 `--auto-strength 0.5`。
+- 大图（>6 MP）自动分块推理，12 MP 约 11 s。
+- 想对比两个版本：`python scripts\compare_preprocess.py 原图 改进图`，或 `enhance.py -c` 生成左右对比。
