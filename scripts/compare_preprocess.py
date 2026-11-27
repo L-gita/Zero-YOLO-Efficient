@@ -106,6 +106,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("inputs", nargs="+")
     ap.add_argument("-o", "--out", default=None)
+    ap.add_argument("--keep-enhanced", action="store_true", help="把最终版单图也保存到输出目录 _enhanced/ 下（便于与 enhance.py 逐像素核对）")
     ap.add_argument("--mode", choices=["auto", "mosaic", "light", "dark"], default="auto")
     ap.add_argument("--zoom", type=float, default=3.0)
     args = ap.parse_args()
@@ -128,6 +129,11 @@ def main():
         dec = pp.auto_decision(rgb) if args.mode == "auto" else None
         # 最终版必须与用户双击的 bat 完全一致：直接调用 enhance.py（同一份代码、同一个入口）
         enh2 = _run_enhance_subprocess(f, args.mode)
+        _stem = os.path.splitext(os.path.basename(f))[0]
+        if getattr(args, "keep_enhanced", False):
+            _kd = os.path.join(os.path.abspath(args.out), "_enhanced")
+            os.makedirs(_kd, exist_ok=True)
+            Image.fromarray(np.asarray(enh2, dtype=np.uint8)).save(os.path.join(_kd, _stem + "_final.png"))
         if args.mode == "auto" and dec["mode"] == "skip":
             tag = "去噪版(判定=跳过,等同原版)"
         elif args.mode == "auto":

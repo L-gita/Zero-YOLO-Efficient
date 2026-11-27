@@ -20,15 +20,43 @@ def ok(name, cond, info=""):
     if not cond:
         fails.append(name)
 
-print("=== 1) skip 图：最终版输出必须与 -m sice 逐像素一致 ===")
-for n in ["493.png", "132_2_.png", "512_0_.png", "101_0_.png"]:
+print("=== 1) 常规分支：σc<0.3 必须逐像素等于 -m sice；σc≥0.3 必须变色噪下降、细节不变 ===")
+sys.path.insert(0, os.path.join(ROOT, "scripts"))
+from compare_preprocess import chroma_noise, luma_std8
+
+for n in ["132_2_.png", "512_0_.png", "493.png", "101_0_.png"]:
     src = os.path.join(ROOT, "demo_final_vs_base", "input", n)
     o1 = os.path.join(ROOT, "demo_audit", "base"); o2 = os.path.join(ROOT, "demo_audit", "auto")
     run(src, o1, ["-m", "sice"]); run(src, o2, ["--preprocess", "auto"])
     f1 = os.path.join(o1, os.path.splitext(n)[0] + "_enhanced.png")
     f2 = os.path.join(o2, os.path.splitext(n)[0] + "_enhanced.png")
-    same = os.path.exists(f1) and os.path.exists(f2) and md5(f1) == md5(f2)
-    ok(f"{n} 逐像素一致", same, "md5 不同")
+    if not (os.path.exists(f1) and os.path.exists(f2)):
+        ok(f"{n} 输出文件存在", False, "缺文件")
+        continue
+    low = np.asarray(Image.open(src).convert("RGB"))
+    s = pp.chroma_light_strength(pp.estimate_chroma_noise(low))
+    if s <= 0:
+        same = md5(f1) == md5(f2)
+        ok(f"{n} σc={pp.estimate_chroma_noise(low):.2f} 跳过 → 与 -m sice 逐像素一致", same, "md5 不同")
+    else:
+        a = np.asarray(Image.open(f1).convert("RGB"))
+        b = np.asarray(Image.open(f2).convert("RGB"))
+        d_cn = chroma_noise(b) - chroma_noise(a)
+        d_det = abs(luma_std8(b) - luma_std8(a))
+        ok(f"{n} σc={pp.estimate_chroma_noise(low):.2f} s={s:.2f} → 色噪下降({d_cn:+.2f})且细节不变({d_det:.2f})",
+           d_cn <= 0.01 and d_det < 0.6, f"d_cn={d_cn:+.2f} d_det={d_det:.2f}")
+
+print("=== 1b) 对比工具输出必须与 enhance.py 逐像素一致（历史上出过“两套管线”bug）===")
+src = os.path.join(ROOT, "demo_final_vs_base", "input", "493.png")
+d1 = os.path.join(ROOT, "demo_audit", "cons_enh"); d2 = os.path.join(ROOT, "demo_audit", "cons_cmp")
+run(src, d1, ["--preprocess", "auto"])
+r = subprocess.run([PY, os.path.join(ROOT, "scripts", "compare_preprocess.py"), src, "-o", d2,
+                    "--mode", "auto", "--keep-enhanced"],
+                   capture_output=True, text=True, encoding="utf-8", errors="replace")
+f1 = os.path.join(d1, "493_enhanced.png")
+f2 = os.path.join(d2, "_enhanced", "493_final.png")
+ok("compare 与 enhance 输出一致", os.path.exists(f1) and os.path.exists(f2) and md5(f1) == md5(f2),
+   f"md5 不同或文件缺失：{os.path.exists(f1)}/{os.path.exists(f2)}")
 
 print("=== 2) 近黑图（126）必须走 near_black 且不得报错 ===")
 r = run(os.path.join(ROOT, "demo_final_vs_base", "input", "126_3_.png"), os.path.join(ROOT, "demo_audit", "nb"), ["--preprocess", "auto"])
