@@ -611,3 +611,13 @@ def auto_decision(img_rgb, mean=None, chroma_noise=None):
     else:
         mode, s_eff = "normal", 0.20
     return dict(mode=mode, s_eff=s_eff, mean=float(mean), chroma_noise=float(chroma_noise))
+
+
+def shadow_lift_float(img01, lift=4.0, lref=60.0):
+    """暗部抬亮（浮点版，0~1 输入），给 --bit16 用，避免先压回 8bit 丢精度。"""
+    x = np.asarray(img01, dtype=np.float32)
+    ycc = cv2.cvtColor(x, cv2.COLOR_RGB2YCrCb)
+    Y = ycc[..., 0] * 255.0
+    w = np.clip((lref - Y) / max(lref, 1e-6), 0.0, 1.0)
+    ycc[..., 0] = np.clip(Y + float(lift) * w, 0.0, 255.0) / 255.0
+    return np.clip(cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB), 0.0, 1.0)

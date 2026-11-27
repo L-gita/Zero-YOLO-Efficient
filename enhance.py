@@ -200,7 +200,7 @@ def main():
     ap.add_argument("--dark-smooth", type=int, default=8,
                     help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
     ap.add_argument("--auto-strength", type=float, default=-1.0,
-                    help="auto 模式的总强度；-1=保守自动（普通暗图 0.45、近黑图 1.0），1.0=原 auto v3 全强度，0=完全等价原版，也可给 0~2 之间的数")
+                    help="auto 模式强度；-1=自动（A 档：按色度噪声自动 跳过/轻度/常规/近黑），1.0=强制全强度，0=完全等价原版，也可给 0~2")
     ap.add_argument("--chroma-mode", choices=["smooth", "desat", "none"], default="none",
                     help="auto 模式下如何处理色度：smooth=局部平滑(干净但可能出色块边界)；desat=全局等比去饱和(不产生局部台阶)；none=完全不碰色度")
     ap.add_argument("--v4-strength", type=float, default=0.9, help="v4 色度去噪强度（默认 0.9）")
@@ -208,7 +208,7 @@ def main():
     ap.add_argument("--v4-beta", type=float, default=1.6, help="v4 亮度结构保护系数（越大越保护真实彩边）")
     ap.add_argument("--v4-guide", type=int, default=16, help="v4 权重羽化半径（像素）")
     ap.add_argument("--shadow-lift", type=float, default=-1.0,
-                    help="阴影补偿（Y 通道暗部抬几级）；-1=自动（输入均值<15 时抬 4 级），0=关闭")
+                    help="阴影补偿（Y 通道暗部抬几级）；-1=自动（启用预处理且输入均值<15 时抬 4 级；-m sice 原版不受影响），0=关闭")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
     args = ap.parse_args()
     # 新抖动模式下不再重复做旧抖动（避免双重抖动/混淆）
@@ -275,8 +275,9 @@ def main():
             # ① 增强前的预处理：auto=场景自适应（E10），否则按手动/旧预设参数
             pre = im
             info = None
+            _skipped = False
             if auto_mode:
-                # 保守自动：普通暗图用 0.45（保纹理、少造线），近黑图（均值<5）才用 1.0（压彩色大斑）
+                # A 档：按图像色度噪声 + 均值自动决定 跳过/轻度/常规/近黑（见 scripts/preprocess.py: auto_decision）
                 if args.auto_strength < 0:
                     # A 档：按图像内容自动决定强度（跳过 / 轻度 / 常规 / 近黑）
                     _dec = pp.auto_decision(np.asarray(im))
@@ -287,8 +288,9 @@ def main():
                     s_eff = args.auto_strength
                     _dec = None
                 if s_eff <= 0.0:
-                    # 跳过改进：预处理/后处理都不做，输出等价原版
+                    # 跳过改进：预处理/后处理都不做，输出与 "-m sice" 逐像素一致（含不加暗部补偿）
                     pre = im
+                    _skipped = True
                     print("    [判定] 该图色度干净、再降噪只会抹平颗粒 → 输出等同原版")
                 else:
                     info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
@@ -311,12 +313,13 @@ def main():
                 out = out_f if args.bit16 else Image.fromarray(u8)
             elif auto_mode:
                 u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
-                info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
                 # E10 后处理 v2（分两档）：
                 #   mean<5 的"几乎全黑"图：走中性抬亮（E9 路线，抑制彩色大斑）
                 #   其余暗图：只在"低信号平坦区"平滑色度，不动亮度（保留深色区细节与颜色）
                 if info["mean"] < 5.0:
-                    # 几乎全黑：走 E9 路线（引导平滑 → 平滑亮度中性抬亮 → 抖动量化）
+                    if args.chroma_mode != "none" or v4_mode:
+                        print("    [提示] 近黑图走中性抬亮分支，--chroma-mode / --preprocess v4 在此分支不生效")
+                    # 几乎全黑：走 E9 路线（引导平滑 → 平滑亮度中性抬亮）
                     u8 = pp.chroma_guided_smooth(u8, luma_guide=u8, radius=2, eps=1e-3, strength=0.5 * s_eff)
                     u8 = pp.quantize8(pp.limit_dark_gain(
                         u8, np.asarray(im), l0=3.0, l1=12.0, gamma=args.dark_gamma,
@@ -372,12 +375,15 @@ def main():
         # 阴影补偿（只对很暗的图）：找回"阴影被加重"的 1~3 级
         _lift = args.shadow_lift
         if _lift < 0:
+            # 只有"启用了预处理"时才自动加暗部补偿；-m sice（纯原版）必须保持原样
+            _pre_on = auto_mode or (args.preprocess or "none").lower() != "none"
             _m = float(np.mean(np.asarray(im.convert("L"), dtype=np.float32)))
-            _lift = 4.0 if _m < 15.0 else 0.0
+            _lift = 4.0 if (_m < 15.0 and _pre_on) else 0.0
+        if _skipped:
+            _lift = 0.0        # 跳过改進时必须与 "-m sice" 完全一致
         if _lift > 0:
             if args.bit16:
-                _u8 = (np.clip(out_f, 0, 1) * 255.0 + 0.5).astype(np.uint8)
-                out_f = pp.shadow_lift(_u8, lift=_lift).astype(np.float32) / 255.0
+                out_f = pp.shadow_lift_float(out_f, lift=_lift)
                 out = out_f
             else:
                 _u8 = np.asarray(out if isinstance(out, Image.Image) else out, dtype=np.uint8)
