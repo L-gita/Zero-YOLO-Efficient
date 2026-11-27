@@ -201,7 +201,7 @@ def main():
                     help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
     ap.add_argument("--auto-strength", type=float, default=-1.0,
                     help="auto 模式的总强度；-1=保守自动（普通暗图 0.45、近黑图 1.0），1.0=原 auto v3 全强度，0=完全等价原版，也可给 0~2 之间的数")
-    ap.add_argument("--chroma-mode", choices=["smooth", "desat", "none"], default="smooth",
+    ap.add_argument("--chroma-mode", choices=["smooth", "desat", "none"], default="none",
                     help="auto 模式下如何处理色度：smooth=局部平滑(干净但可能出色块边界)；desat=全局等比去饱和(不产生局部台阶)；none=完全不碰色度")
     ap.add_argument("--v4-strength", type=float, default=0.9, help="v4 色度去噪强度（默认 0.9）")
     ap.add_argument("--v4-tau", type=float, default=5.0, help="v4 色度噪声阈值（越大越保守）")
@@ -277,7 +277,7 @@ def main():
                 # 保守自动：普通暗图用 0.45（保纹理、少造线），近黑图（均值<5）才用 1.0（压彩色大斑）
                 if args.auto_strength < 0:
                     _m = float(np.mean(np.asarray(im.convert("L"), dtype=np.float32)))
-                    s_eff = 1.0 if _m < 5.0 else 0.45
+                    s_eff = 1.0 if _m < 5.0 else 0.20
                 else:
                     s_eff = args.auto_strength
                 info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
