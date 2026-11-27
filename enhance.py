@@ -34,6 +34,7 @@ import time
 import warnings
 
 import numpy as np
+import cv2
 import torch
 from PIL import Image, ImageOps
 
@@ -200,6 +201,8 @@ def main():
                     help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
     ap.add_argument("--auto-strength", type=float, default=-1.0,
                     help="auto 模式的总强度；-1=保守自动（普通暗图 0.45、近黑图 1.0），1.0=原 auto v3 全强度，0=完全等价原版，也可给 0~2 之间的数")
+    ap.add_argument("--chroma-mode", choices=["smooth", "desat", "none"], default="smooth",
+                    help="auto 模式下如何处理色度：smooth=局部平滑(干净但可能出色块边界)；desat=全局等比去饱和(不产生局部台阶)；none=完全不碰色度")
     ap.add_argument("--v4-strength", type=float, default=0.9, help="v4 色度去噪强度（默认 0.9）")
     ap.add_argument("--v4-tau", type=float, default=5.0, help="v4 色度噪声阈值（越大越保守）")
     ap.add_argument("--v4-beta", type=float, default=1.6, help="v4 亮度结构保护系数（越大越保护真实彩边）")
@@ -309,11 +312,20 @@ def main():
                                                     tau=args.v4_tau, beta=args.v4_beta,
                                                     guide_radius=args.v4_guide)
                         u8 = pp.quantize8(_v4.astype(np.float32), dither=args.dither)
-                    else:
+                    elif args.chroma_mode == "smooth":
                         u8 = pp.chroma_denoise_flat(u8, np.asarray(im), info["noise"],
                                                     strength=min(1.2, max(0.0, info["k"] * 0.45 * s_eff)),
                                                     target_amp=None)
                         u8 = pp.quantize8(u8, dither=args.dither)
+                    elif args.chroma_mode == "desat":
+                        # 全局、等比去饱和：不产生局部平台，因此不会新增"色块分界线"
+                        _ycc = cv2.cvtColor(u8.astype(np.float32), cv2.COLOR_RGB2YCrCb)
+                        _k = 1.0 - 0.15 * min(1.0, s_eff)
+                        _ycc[..., 1] = 128 + (_ycc[..., 1] - 128) * _k
+                        _ycc[..., 2] = 128 + (_ycc[..., 2] - 128) * _k
+                        u8 = np.clip(cv2.cvtColor(_ycc, cv2.COLOR_YCrCb2RGB), 0, 255).astype(np.uint8)
+                    else:
+                        u8 = pp.quantize8(u8.astype(np.float32), dither=args.dither)
                 out_f = u8.astype(np.float32) / 255.0
                 out = out_f if args.bit16 else Image.fromarray(u8)
             elif use_post:

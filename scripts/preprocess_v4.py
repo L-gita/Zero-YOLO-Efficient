@@ -87,3 +87,85 @@ def seam_prominence(rgb_u8, flat_pct=30, pct=95):
                         + np.abs(cv2.Sobel(c[..., k], cv2.CV_32F, 0, 1, 3)))
     flat = gy <= np.percentile(gy, flat_pct)
     return float(np.percentile(gc[flat], pct))
+
+
+def chroma_denoise_v4b(rgb_u8, strength=0.9, tau=5.0, beta=1.6,
+                       sigma_feather=8.0, sigma_chroma=2.0, smoother="gauss",
+                       guide_radius=4):
+    """v4b：修掉 v4 的"方块感"。
+
+    v4 的两个问题（实测会造成"分界更明显"）：
+      1) 权重羽化用引导滤波 r=16 的盒式均值 → 在亮度平坦区退化成 33×33 的方块状台阶；
+      2) 色度平滑用 cv2.blur（7×7 盒式）→ 产生棋盘格/阶梯状的色块边界。
+    v4b 改为：
+      - 权重羽化：高斯（无固定支撑，连续过渡）；
+      - 色度平滑：高斯 sigma_chroma，或"亮度引导滤波"（smoother='guided'，保边更稳）。
+    """
+    if strength <= 0:
+        return rgb_u8
+    x = rgb_u8.astype(np.float32)
+    ycc = cv2.cvtColor(x, cv2.COLOR_RGB2YCrCb)
+    Y, Cr, Cb = ycc[..., 0].copy(), ycc[..., 1].copy(), ycc[..., 2].copy()
+    C = np.dstack([Cr, Cb])
+
+    C_lp = cv2.GaussianBlur(C, (0, 0), 1.5)
+    hp_c = np.abs(C - C_lp).max(axis=2)
+    Y_hp = np.abs(Y - cv2.GaussianBlur(Y, (0, 0), 1.5))
+    num = hp_c - beta * Y_hp
+    w_raw = _sstep(num / max(tau, 1e-3), 0.0, 1.0)
+    # B（修）：高斯羽化，避免 16px 盒式台阶
+    w = cv2.GaussianBlur(w_raw, (0, 0), float(sigma_feather))
+    w = np.clip(w, 0.0, 1.0) * float(strength)
+    w3 = w[..., None]
+
+    if smoother == "guided":
+        g = _guided_filter(Y, C[..., 0], r=guide_radius, eps=1e-2)
+        g2 = _guided_filter(Y, C[..., 1], r=guide_radius, eps=1e-2)
+        C_sm = np.dstack([g, g2])
+    else:
+        C_sm = cv2.GaussianBlur(C, (0, 0), float(sigma_chroma))
+    C_out = C * (1.0 - w3) + C_sm * w3
+
+    ycc2 = np.dstack([Y, C_out[..., 0], C_out[..., 1]])
+    out = cv2.cvtColor(ycc2, cv2.COLOR_YCrCb2RGB)
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def artificial_edges(u8, dc_thr=3.0, dy_thr=1.0):
+    """每千像素中"色度跳变但亮度平坦"的边界数 —— 越少越少人造色块边界（色块分界线）。"""
+    y = cv2.cvtColor(u8, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    c = cv2.cvtColor(u8, cv2.COLOR_RGB2YCrCb)[..., 1:].astype(np.float32)
+    cnt = 0
+    tot = 0
+    for axis in (1, 0):
+        dY = np.abs(np.diff(y, axis=axis))
+        dC = np.maximum(np.abs(np.diff(c[..., 0], axis=axis)), np.abs(np.diff(c[..., 1], axis=axis)))
+        cnt += int(np.count_nonzero((dC >= dc_thr) & (dY < dy_thr)))
+        tot += int(dY.size)
+    return 1000.0 * cnt / max(1, tot)
+
+
+def chroma_desat_noisy(rgb_u8, strength=1.0, tau=5.0, beta=1.6,
+                       sigma_feather=6.0, max_desat=0.55):
+    """v4c：**不做任何空间平滑**，只对"色度噪声大、亮度没结构"的像素做色度幅度收缩。
+
+    动机：任何空间色度平滑都会把色度抹成平台 → 平台边缘就是"色块分界线"。
+    只做幅度收缩（朝中性 128 拉）不会产生平台，因此不会造新边界；
+    代价是这些像素变成"低饱和的灰"，但抓取更依赖轮廓/亮度结构，影响小。
+    """
+    if strength <= 0:
+        return rgb_u8
+    x = rgb_u8.astype(np.float32)
+    ycc = cv2.cvtColor(x, cv2.COLOR_RGB2YCrCb)
+    Y, Cr, Cb = ycc[..., 0].copy(), ycc[..., 1].copy(), ycc[..., 2].copy()
+    C = np.dstack([Cr, Cb])
+    hp_c = np.abs(C - cv2.GaussianBlur(C, (0, 0), 1.5)).max(axis=2)
+    Y_hp = np.abs(Y - cv2.GaussianBlur(Y, (0, 0), 1.5))
+    num = hp_c - beta * Y_hp
+    w = _sstep(num / max(tau, 1e-3), 0.0, 1.0)
+    w = cv2.GaussianBlur(w, (0, 0), float(sigma_feather))     # 只羽化"强度图"，不动色度空间结构
+    w = np.clip(w, 0.0, 1.0) * float(strength) * float(max_desat)
+    C_out = C * (1.0 - w[..., None]) + 128.0 * w[..., None]   # 朝中性收缩
+    ycc2 = np.dstack([Y, C_out[..., 0], C_out[..., 1]])
+    out = cv2.cvtColor(ycc2, cv2.COLOR_YCrCb2RGB)
+    return np.clip(out, 0, 255).astype(np.uint8)

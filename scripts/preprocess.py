@@ -487,7 +487,7 @@ def auto_preprocess(low, strength=1.0):
     # 只对亮度做轻度降噪：色度降噪留给"增强后、低信号平坦区"（在输入上动色度会造成偏色，
     # 因为 Zero-DCE 的曲线是逐通道独立的，输入色度一变，输出颜色就跟着偏）
     if s > 0:
-        x = luma_denoise(x, h=(0.8 + 0.15 * k) * s)
+        x = luma_denoise(x, h=1.5 + 0.5 * k, strength=min(1.0, s))
     did_prelift = False
     if gray_mean < 4.0 and s > 0:      # 只有"几乎全黑"才轻抬，避免正常暗图被抬亮后变淡
         x = prelift(x, amount=0.08 * s)
@@ -540,11 +540,19 @@ def chroma_amp(img_rgb):
     """RGB(uint8) 的色度幅度均值（供外部在不 import cv2 时调用）。"""
     return _chroma_amp(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32))
 
-def luma_denoise(img_rgb, h=2.0, template=7, search=15):
-    """只对亮度通道做非局部均值降噪（不动色度，避免偏色）。"""
-    ycc = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb)
-    y = cv2.fastNlMeansDenoising(ycc[..., 0], None, h=float(h),
-                                 templateWindowSize=template, searchWindowSize=search)
+def luma_denoise(img_rgb, h=2.0, template=7, search=15, strength=1.0):
+    """只对亮度通道做非局部均值降噪（不动色度，避免偏色）。
+
+    strength = 0~1 的"混合比例"：NLM 结果与原图按 strength 混合。
+    注意：cv2.fastNlMeansDenoising 的 h 即使很小也会明显平滑（非线性悬崖），
+    所以"强度控制"不能靠 h 缩放，必须靠这里的混合比例，否则 s=0.12 也会大幅吃掉纹理。
+    """
+    s = float(np.clip(strength, 0.0, 1.0))
+    ycc = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    if s <= 0:
+        return img_rgb
+    yd = cv2.fastNlMeansDenoising(ycc[..., 0].astype(np.uint8), None, h=float(h),
+                                  templateWindowSize=template, searchWindowSize=search).astype(np.float32)
     out = ycc.copy()
-    out[..., 0] = y
-    return cv2.cvtColor(out, cv2.COLOR_YCrCb2RGB)
+    out[..., 0] = ycc[..., 0] * (1.0 - s) + yd * s
+    return cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
