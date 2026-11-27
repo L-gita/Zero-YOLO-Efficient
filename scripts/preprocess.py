@@ -303,7 +303,7 @@ def limit_dark_gain(enh, low, l0=6.0, l1=20.0, gamma=0.40, strength=0.85,
     return np.clip(out, 0.0, 255.0)
 
 
-def quantize8(img_float, dither=0.6, seed=0):
+def quantize8(img_float, dither=0.0, seed=0):
     """float(0~255) → uint8，可选加抖动（抑制 8bit 量化条带）。"""
     x = np.asarray(img_float, np.float32)
     if dither and dither > 0:

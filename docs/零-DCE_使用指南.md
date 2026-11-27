@@ -218,7 +218,7 @@ python C:\Users\12983\Documents\repro\scripts\pair_compare.py `
 
 旧方案（E9）：
 **预处理（去块 → 色度优先降噪 → 暗部轻抬）→ Zero-DCE → 后处理（亮度引导色度平滑 → 近黑区限增益 v2）**。
-限增益 v2 的三个关键点：**平滑亮度**（避免 8-bit 台阶变硬灰块）、**羽化掩码**、**输出抖动 ±0.6 级**（抑制条带）。
+限增益 v2 的三个关键点：**平滑亮度**（避免 8-bit 台阶变硬灰块）、**羽化掩码**（原实现还有输出抖动，已于 2026-11-28 移除：实测无可见收益）。
 
 ```powershell
 # 推荐档（E10 场景自适应：自动判断要不要降噪/去块/轻抬，正常夜景不会被洗淡）
@@ -233,7 +233,7 @@ python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess d
 
 # 单项手动控制（0 = 关闭）+ 细调
 python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --denoise 0.5 --deblock 0.5 --prelift 0.10 --guided 0.5 --limit-dark 0.80
-python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --preprocess mosaic --dark-gamma 0.50 --dark-smooth 10 --dither 0.8
+python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --preprocess mosaic --dark-gamma 0.50 --dark-smooth 10
 
 # 不加参数 = 和以前完全一样（默认全关）
 python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
@@ -300,38 +300,3 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 - 三个入口都不含「边缘损失 + 马赛克预处理」的组合版；需要更强去噪可用命令行 `--preprocess dark`，想调轻用 `--auto-strength 0.5`。
 - 大图（>6 MP）自动分块推理，12 MP 约 11 s。
 - 想对比两个版本：`python scripts\compare_preprocess.py 原图 改进图`，或 `enhance.py -c` 生成左右对比。
-
-### 12.1 默认已是"保守档"（2026-11-27）
-
-`--preprocess auto` 默认 `--auto-strength -1`：普通暗图自动用 0.45（保纹理、少出大片色块），
-近黑图（均值<5）自动用 1.0（压彩色斑）。想手调：
-
-```powershell
-python enhance.py 图.jpg --preprocess auto --auto-strength 1.0   # 旧的全强度（更干净但更平滑）
-python enhance.py 图.jpg --preprocess auto --auto-strength 0     # 完全不做预处理与后处理（等价原版）
-python enhance.py 图.jpg --preprocess auto --auto-strength 0.25  # 更保守
-```
-
-### 12.2 v4 原型（A+B 色度去噪）
-
-```powershell
-python enhance.py 图.jpg --preprocess v4 -c                 # 默认强度 0.9
-python enhance.py 图.jpg --preprocess v4 --v4-strength 1.3   # 更强（更干净，可能略糊）
-```
-思路：只在"色度在抖、亮度没有对应结构"的地方处理色度，并用亮度引导滤波把权重羽化，
-所以不会沿色度等值线切出人造分界线。适合"结构/轮廓比绝对干净更重要"的抓取场景。
-
-### 12.3 默认已改为"保颗粒"档（2026-11-27）
-
-默认 `--auto-strength -1`：普通暗图用 **0.20** 且 **不碰色度**（`--chroma-mode none`），近黑图（均值<5）仍用 1.0。
-- 优点：**不会出现大片色块和分界线**，适合识别/抓取；
-- 代价：彩色颗粒噪声保留（比强降噪版脏一点）；
-- 想要更干净（可能出色块）：`--auto-strength 0.45 --chroma-mode smooth`；
-- 想看"全局去饱和而不造平台"：`--auto-strength 0.25 --chroma-mode desat`。
-
-### 12.4 阴影补偿（`--shadow-lift`，2026-11-27）
-
-很暗的图（输入均值 < 15）增强后暗部会略变暗（约 1~1.5 级）。默认已自动补偿 4 级（只抬 Y 通道暗部，`lref=60` 以上不抬）。
-- 关掉：`--shadow-lift 0`
-- 加钱/减钱：`--shadow-lift 2`（更轻）/ `--shadow-lift 6`（更亮）
-- 亮图（均值 ≥ 15）自动不启用，不影响观感。
