@@ -151,8 +151,8 @@ def fig_strips(cases):
         cw, ch = box[2] - box[0], box[3] - box[1]
         scale = max(2, int(360 / max(cw, ch)))
         top, bottom = [], []
-        short = {"E0": "低照原图", "E1": "基线 Zero-DCE", "E2": "先降噪→增强",
-                 "E3": "增强→后降噪", "E4": "弱降噪+平滑", "E5": "本文方案"}
+        short = {"E0": "低照原图", "E1": "基线", "E2": "先降噪", "E3": "后降噪",
+                 "E4": "弱降噪+平滑", "E5": "旧方案", "E6": "引导平滑", "E7": "抑制无信号区", "E8": "本文推荐"}
         for p in ["E0", "E1", "E5", "E6", "E8"]:
             t = Image.fromarray(outs[p]).resize((260, int(260 * h / w)), Image.LANCZOS)
             top.append(_label(np.asarray(t), f"{p} {short.get(p, p)}"))
