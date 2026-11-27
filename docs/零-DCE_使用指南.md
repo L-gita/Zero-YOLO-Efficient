@@ -209,27 +209,33 @@ python C:\Users\12983\Documents\repro\scripts\pair_compare.py `
 
 ---
 
-## 11. 进阶：马赛克预处理（暗光/压缩重的图）
+## 11. 进阶：马赛克预处理（暗光 / 压缩重的图）
 
-暗光图增强后容易出现彩色花斑/块状"马赛克"——这是把原图已有的 8-bit 台阶、色度噪声、JPEG 8×8 压缩缝一起放大了。
-加一套预处理（去块 → 色度优先降噪 → 暗部轻抬）和后处理（降噪 + 保边平滑）就能明显改善。
+暗光图增强后容易出现彩色花斑或块状"马赛克"——这是把原图已有的 8-bit 台阶、色度噪声、JPEG 8×8 压缩缝一起放大了；
+而且近黑区没有可靠信号，模型还可能把噪声放大成**棕/绿/紫色大斑块**。
+
+现在的方案是：**预处理（去块 → 色度优先降噪 → 暗部轻抬）→ Zero-DCE → 后处理（亮度引导色度平滑 → 近黑区限增益）**。
 
 ```powershell
-# 推荐档（最常用）
+# 推荐档（最常用：常规暗光、色噪明显）
 python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess mosaic -c --bit16
 
-# 温和档 / 强力档
+# 温和档（怕抹细节）/ 极暗档（几乎全黑）
 python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess light -c
-python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess strong --bit16
+python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess dark --bit16
 
 # 单项手动控制（0 = 关闭）
-python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --denoise 1.0 --deblock 1.0 --prelift 0.15 --post 1.0
+python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --denoise 0.6 --deblock 0.5 --prelift 0.15 --guided 0.7 --limit-dark 0.85
 
 # 不加参数 = 和以前完全一样（默认全关）
 python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 ```
 
-效果（eval15 15 对，相对不开预处理的基线）：色度噪声 **−91%**、梯度放大 **5.47×→1.80×**、块效应比 1.004→0.882、PSNR 15.86→16.08。
-细节与取舍见 `C:\Users\12983\Documents\repro\docs\零-DCE_马赛克预处理方案.md`。
+效果（eval15 15 对，相对"直接增强"的基线）：
+色度噪声 **12.18 → 2.01**、彩色大斑块占比 **0.022 → 0.090**（极端暗图从 14.6% 降到 0.21%）、
+亮度细节保留 75%（std8 8.91 / 11.91）、SSIM **0.5584 → 0.6835**。
+
+> 早前那版"重降噪 + 双边滤波"（E5）虽然色噪更低，但会把近黑区抹成大片彩色斑块、图像变糊，**已被证伪**，不要再用于极暗图。
+> 全部对照（E0~E8）、专项诊断与参数说明见 `C:\Users\12983\Documents\repro\docs\零-DCE_马赛克预处理方案.md`。
 
 **注意：** `--bit16` 会另存一份 `_enhanced16.png`（16 位），但微信/照片查看器会压回 8 位；用 Photoshop/GIMP 才能看到位深差别。

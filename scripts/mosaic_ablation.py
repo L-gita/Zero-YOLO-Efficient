@@ -96,6 +96,36 @@ def get_net():
     return _NET
 
 
+def _local_std(ch, k):
+    m = cv2.boxFilter(ch, -1, (k, k))
+    m2 = cv2.boxFilter(ch * ch, -1, (k, k))
+    return np.sqrt(np.maximum(m2 - m * m, 0))
+
+
+def chroma_plateau(rgb, mask, step=6, amp_thr=8.0):
+    """最大“有色”同色块面积占比（只统计明显有色的像素，排除中性平坦暗区）。
+
+    为什么只算有色：近黑区域本来就没有颜色信息，抹成中性灰是"干净"而不是"色块"；
+    真正难看的是带颜色的斑块（棕/绿/紫），所以要按饱和度筛。
+    """
+    ycc = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    cr, cb = ycc[:, :, 1], ycc[:, :, 2]
+    amp = np.sqrt((cr - 128.0) ** 2 + (cb - 128.0) ** 2)
+    sat = (amp >= amp_thr) & mask
+    key = (np.round(cr / step) * 200 + np.round(cb / step)).astype(np.int32)
+    best = 0
+    for v in np.unique(key[sat])[:200]:
+        m = ((key == v) & sat).astype(np.uint8)
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(m, 8)
+        if n > 1:
+            best = max(best, int(stats[1:, cv2.CC_STAT_AREA].max()))
+    return best / (rgb.shape[0] * rgb.shape[1])
+
+
+def luma_std8(rgb, mask):
+    y = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)[:, :, 0].astype(np.float32)
+    return float(_local_std(y, 8)[mask].mean())
+
 def enhance(rgb_u8):
     net = get_net()
     dev = "cuda" if torch.cuda.is_available() else "cpu"
@@ -179,21 +209,39 @@ def run_pipeline(name, rgb):
         pre = pp.denoise_chroma(rgb, 0.6)
         return pp.post_smooth(enhance(pre), 0.8)
     if name == "E5":
+        # 旧方案：色度 NLM + 双边 —— 色噪最低但会把近黑区抹成大片色斑（见 e5_check 诊断）
         pre = pp.preprocess(rgb, denoise=1.0, deblock_strength=1.0, prelift_amount=0.15)
         out = enhance(pre)
-        out = pp.denoise_chroma(out, 0.6)      # 后置：再压一次残余色噪
+        out = pp.denoise_chroma(out, 0.6)
         return pp.post_smooth(out, 0.6)
+    if name == "E6":
+        # 新方案：预处理轻一些 + 后处理改成“亮度引导的色度平滑”（只动色度、不动亮度）
+        pre = pp.preprocess(rgb, denoise=0.6, deblock_strength=0.5, prelift_amount=0.15)
+        out = enhance(pre)
+        return pp.chroma_guided_smooth(out, luma_guide=out, radius=2, eps=1e-3, strength=0.7)
+    if name == "E7":
+        # E6 + 极暗无信号区抑制（保守参数：只处理真正没有信号的区域）
+        out = run_pipeline("E6", rgb)
+        return pp.suppress_low_snr(out, rgb, dark_thr=25, var_thr=5.0, strength=0.7,
+                                   feather=10, max_gain=1.6)
+    if name == "E8":
+        # 本文推荐：E6 + 近黑区限增益（中性抬亮替代彩色放大，消除彩色大斑块）
+        out = run_pipeline("E6", rgb)
+        return pp.limit_dark_gain(out, rgb, l0=6.0, l1=20.0, gamma=0.40, strength=0.85)
     raise ValueError(name)
 
 
-PIPELINES = ["E0", "E1", "E2", "E3", "E4", "E5"]
+PIPELINES = ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"]
 DESC = {
     "E0": "低照原图（参考）",
     "E1": "原图→Zero-DCE（基线）",
     "E2": "色度降噪→Zero-DCE",
     "E3": "Zero-DCE→色度降噪",
     "E4": "弱降噪→Zero-DCE→保边平滑",
-    "E5": "去块+降噪+轻抬→Zero-DCE→后置降噪+平滑（本文）",
+    "E5": "旧方案：重降噪+双边（会抹出大色块）",
+    "E6": "本文方案：轻预处理+亮度引导色度平滑",
+    "E7": "E6 + 极暗无信号区抑制",
+    "E8": "E6 + 近黑区限增益（本文推荐）",
 }
 
 
@@ -239,6 +287,7 @@ def main():
                 ssim=ssim_rgb(out, gt) if gt is not None else "",
                 dark_frac=float(mask.mean()), bright_in=bright_in,
                 chroma_in=chroma_noise(rgb, mask), blockiness_in=blk_in,
+                plateau=chroma_plateau(out, mask), luma_std8=luma_std8(out, mask),
             )
             rows.append(row)
         print(f"[{i}/{len(items)}] {group}/{name}  {rgb.shape[1]}x{rgb.shape[0]}  "
@@ -247,7 +296,8 @@ def main():
 
     # ---- CSV
     cols = ["group", "name", "pipeline", "bright", "bright_in", "chroma_noise", "chroma_in",
-            "blockiness", "blockiness_in", "M_gain", "psnr", "ssim", "dark_frac"]
+            "blockiness", "blockiness_in", "M_gain", "psnr", "ssim", "dark_frac",
+            "plateau", "luma_std8"]
     csv_path = os.path.join(OUT, "metrics.csv")
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as fp:
         w = csv.DictWriter(fp, fieldnames=cols)
@@ -257,14 +307,14 @@ def main():
 
     # ---- 分组均值
     groups = list(dict.fromkeys(r["group"] for r in rows))
-    summary = ["# 马赛克预处理对照实验结果（E0~E5）", ""]
+    summary = ["# 马赛克预处理对照实验结果（E0~E7）", ""]
     summary += ["> 指标都在“输入暗区掩码”内统计；色噪/块效应/M放大 越小越好；PSNR/SSIM 只在有 GT 的 eval15 上算。", ""]
     for g in groups:
         summary.append(f"## {g}")
         summary.append("")
         has_gt = any(r["psnr"] != "" for r in rows if r["group"] == g)
-        head = "| 管线 | 说明 | 亮度 | 色噪 | 块效应比 | M放大 |"
-        sep = "| --- | --- | --- | --- | --- | --- |"
+        head = "| 管线 | 说明 | 亮度 | 色噪 | 块效应比 | M放大 | 彩色块占比 | 亮度细节(std8) |"
+        sep = "| --- | --- | --- | --- | --- | --- | --- | --- |"
         if has_gt:
             head += " PSNR | SSIM |"
             sep += " --- | --- |"
@@ -277,7 +327,9 @@ def main():
             line = (f"| {pl} | {DESC[pl]} | {sum(r['bright'] for r in rs)/n:.1f} | "
                     f"{sum(r['chroma_noise'] for r in rs)/n:.3f} | "
                     f"{sum(r['blockiness'] for r in rs)/n:.3f} | "
-                    f"{sum(r['M_gain'] for r in rs)/n:.2f}× |")
+                    f"{sum(r['M_gain'] for r in rs)/n:.2f}× | "
+                    f"{sum(r['plateau'] for r in rs)/n:.4f} | "
+                    f"{sum(r['luma_std8'] for r in rs)/n:.2f} |")
             if has_gt:
                 line += (f" {sum(float(r['psnr']) for r in rs)/n:.2f} | "
                          f"{sum(float(r['ssim']) for r in rs)/n:.4f} |")
@@ -286,7 +338,10 @@ def main():
     summary += ["## 怎么读", "",
                 "- **E1 → E2**：把降噪放到增强之前 → 色噪和块效应应该明显下降（核心结论）",
                 "- **E1 → E3**：降噪放到增强之后 → 也有改善，但不如 E2（噪声已被放大成结构化色块）",
-                "- **E5**：方案 B 全套（去块+降噪+轻抬+平滑）→ 期望色噪最低、观感最干净",
+                "- **E5**：旧方案（重降噪+双边）→ 色噪最低，但会把近黑区抹成大片色斑（彩色块占比升高、亮度细节下降）",
+                "- **E6**：本文方案（轻预处理 + 亮度引导色度平滑）→ 色噪仍低，同时不糊亮度、不产生大色块",
+                "- **E7**：E6 + 极暗无信号区抑制 → 过强，整体变暗、PSNR 掉（不推荐）",
+                "- **E8**：E6 + 近黑区限增益（中性抬亮替代彩色放大）→ 彩色大斑块基本消失，本文推荐",
                 "- 代价：降噪越强，细节（尤其暗部纹理）越容易被抹平，需在“干净”和“细节”之间取平衡",
                 ""]
     md_path = os.path.join(OUT, "summary.md")

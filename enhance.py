@@ -63,9 +63,14 @@ MODELS = {
 }
 # 预处理预设：--preprocess 一键选
 PRESETS = {
-    "mosaic": dict(denoise=1.0, deblock=1.0, prelift=0.15, post=1.0),   # 推荐：针对极暗/马赛克
-    "light": dict(denoise=0.6, deblock=0.0, prelift=0.10, post=0.6),    # 温和：一般夜景
-    "strong": dict(denoise=2.0, deblock=1.0, prelift=0.25, post=1.5),   # 强：极端暗光
+    # mosaic（推荐）：轻度预处理 + 亮度引导色度平滑 + 近黑区限增益（消除彩色大斑块）
+    "mosaic": dict(denoise=0.6, deblock=0.5, prelift=0.15, guided=0.7, limit_dark=0.85),
+    # light（温和）：一般夜景，尽量少动细节
+    "light": dict(denoise=0.6, deblock=0.0, prelift=0.10, guided=0.5, limit_dark=0.0),
+    # dark（极暗）：更猛一点
+    "dark": dict(denoise=1.0, deblock=1.0, prelift=0.20, guided=0.8, limit_dark=1.0),
+    # 兼容旧名字
+    "strong": dict(denoise=1.0, deblock=1.0, prelift=0.20, guided=0.8, limit_dark=1.0),
 }
 _net_cache = {}
 
@@ -172,7 +177,10 @@ def main():
     ap.add_argument("--denoise", type=float, default=0.0, help="色度优先降噪强度（0=关, 1=推荐）")
     ap.add_argument("--deblock", type=float, default=0.0, help="JPEG 去块强度（0=关, 1=推荐）")
     ap.add_argument("--prelift", type=float, default=0.0, help="增强前暗部轻抬（0=关, 0.15=推荐）")
-    ap.add_argument("--post", type=float, default=0.0, help="增强后保边平滑（0=关, 1=推荐）")
+    ap.add_argument("--post", type=float, default=0.0, help="增强后双边平滑（旧参数，一般不用）")
+    ap.add_argument("--guided", type=float, default=0.0, help="增强后亮度引导的色度平滑（推荐 0.5~0.8）")
+    ap.add_argument("--limit-dark", type=float, default=0.0,
+                    help="近黑区限增益：0=关，0.85=推荐（用中性抬亮替代彩色放大，消除大色块）")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
     args = ap.parse_args()
 
@@ -189,13 +197,18 @@ def main():
         if args.prelift == 0.0:
             args.prelift = p["prelift"]
         if args.post == 0.0:
-            args.post = p["post"]
+            args.post = 0.0
+        if args.guided == 0.0:
+            args.guided = p["guided"]
+        if args.limit_dark == 0.0:
+            args.limit_dark = p["limit_dark"]
 
     use_pre = (args.denoise > 0 or args.deblock > 0 or args.prelift > 0)
-    use_post = args.post > 0
+    use_post = (args.post > 0 or args.guided > 0 or args.limit_dark > 0)
     if use_pre or use_post:
         print(f"[预处理] 去块={args.deblock:g}  色度降噪={args.denoise:g}  "
-              f"暗部轻抬={args.prelift:g}  后处理平滑={args.post:g}  16bit={args.bit16}")
+              f"暗部轻抬={args.prelift:g}  | 后处理: 引导平滑={args.guided:g}  "
+              f"近黑限增益={args.limit_dark:g}  16bit={args.bit16}")
 
     ckpt = MODELS.get(args.model.lower(), args.model)
     net = get_net(ckpt)
@@ -232,11 +245,20 @@ def main():
                     deblock_strength=args.deblock, prelift_amount=args.prelift))
             # ② Zero-DCE 增强（bit16 时保留 float 结果，避免再被压回 8-bit）
             raw, mode = enhance_image(net, pre, args.tile, return_float=args.bit16)
-            # ③ 增强后的保边平滑
+            # ③ 增强后的处理：引导平滑 → 近黑限增益（→ 可选双边）
             if use_post:
-                arr = raw if isinstance(raw, np.ndarray) else np.asarray(raw, dtype=np.float32) / 255.0
-                u8 = (arr * 255.0 + 0.5).astype(np.uint8) if isinstance(raw, np.ndarray) else np.asarray(raw)
-                u8 = pp.post_smooth(u8, args.post)
+                if isinstance(raw, np.ndarray) and raw.dtype != np.uint8:
+                    u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8)
+                else:
+                    u8 = np.asarray(raw).astype(np.uint8)
+                if args.guided > 0:
+                    u8 = pp.chroma_guided_smooth(u8, luma_guide=u8, radius=2, eps=1e-3,
+                                                 strength=args.guided)
+                if args.limit_dark > 0:
+                    u8 = pp.limit_dark_gain(u8, np.asarray(im), l0=6.0, l1=20.0,
+                                            gamma=0.40, strength=args.limit_dark)
+                if args.post > 0:
+                    u8 = pp.post_smooth(u8, args.post)
                 out_f = u8.astype(np.float32) / 255.0
                 out = out_f if args.bit16 else Image.fromarray(u8)
             else:

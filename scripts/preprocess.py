@@ -140,6 +140,133 @@ def post_smooth(img_rgb, strength=1.0):
 
 
 # ----------------------------------------------------------------------------
+# ④b 亮度引导的色度平滑（推荐替代 post_smooth）
+#     -- 用亮度 Y 当“导游”，只在亮度平坦处平滑色度；亮度有边缘时色度不动
+#     好处：不会把颜色抹过大片平坦暗区形成“大色块”，也不会跨物体边界串色
+# ----------------------------------------------------------------------------
+def _box(x, radius):
+    k = 2 * int(radius) + 1
+    return cv2.boxFilter(x, -1, (k, k))
+
+
+def guided_filter(guide, src, radius=2, eps=1e-3):
+    """快速引导滤波（He et al. 的非近似版），guide/src 均为 float32 单通道。"""
+    r = int(radius)
+    mean_i = _box(guide, r)
+    mean_p = _box(src, r)
+    corr_i = _box(guide * guide, r)
+    corr_ip = _box(guide * src, r)
+    var_i = corr_i - mean_i * mean_i
+    cov_ip = corr_ip - mean_i * mean_p
+    a = cov_ip / (var_i + eps)
+    b = mean_p - a * mean_i
+    mean_a = _box(a, r)
+    mean_b = _box(b, r)
+    return mean_a * guide + mean_b
+
+
+def chroma_guided_smooth(img_rgb, luma_guide=None, radius=2, eps=1e-3, strength=1.0):
+    """亮度引导的色度平滑：只动 Cb/Cr，不动 Y（不糊亮度细节）。
+
+    img_rgb    : uint8 RGB
+    luma_guide : 用来当导游的图（默认就是自己；若要“用增强前的亮度引导”，传原图）
+    radius     : 局部窗口半径，2 表示 5×5；越大越平滑（>4 容易抹出大色块）
+    eps        : 引导滤波正则项，越小越"跟着亮度走"（1e-3 ≈ 灰度 0.03 以内都算平）
+    strength   : 0~1，平滑结果与原色度的插值比例
+    """
+    if strength <= 0:
+        return img_rgb
+    ycc = cv2.cvtColor(np.ascontiguousarray(img_rgb), cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    guide_rgb = img_rgb if luma_guide is None else luma_guide
+    g = cv2.cvtColor(np.ascontiguousarray(guide_rgb), cv2.COLOR_RGB2YCrCb)[:, :, 0].astype(np.float32) / 255.0
+    out = ycc.copy()
+    s = float(np.clip(strength, 0.0, 1.0))
+    for ci in (1, 2):
+        src = ycc[:, :, ci] / 255.0
+        sm = guided_filter(g, src, radius=radius, eps=eps) * 255.0
+        out[:, :, ci] = ycc[:, :, ci] * (1.0 - s) + sm * s
+    res = cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
+    return res
+
+
+
+# ----------------------------------------------------------------------------
+# ④c 极暗无信号区抑制（E6 方案的关键一步）
+#     问题：近黑区域里"只有噪声、没有信号"，任何降噪都只能把它抹成一块均匀色斑，
+#           增强后就是用户看到的"更大块马赛克 / 一片色块"。
+#     做法：用输入低照图判断"有没有信号"，对没信号的区域
+#           - 色度拉回中性（去色，避免彩色斑块）
+#           - 亮度压回到 输入×max_gain 以内（不再死命提亮）
+#           掩码羽化，避免出现新的硬边界。
+# ----------------------------------------------------------------------------
+def suppress_low_snr(enh_rgb, low_rgb, dark_thr=45, var_thr=10.0, strength=1.0,
+                     feather=12, max_gain=2.0):
+    """极暗无信号区抑制：该区域宁可压暗去饱和，也不要变成彩色大色块。
+
+    enh_rgb   : 增强结果 uint8 RGB
+    low_rgb   : 对应的输入低照图 uint8 RGB（用它判断有没有信号）
+    dark_thr  : 灰度低于此值算"暗"（0~255）
+    var_thr   : 5×5 局部标准差低于此值算"没纹理"（0~255）
+    strength  : 抑制强度 0~1
+    feather   : 掩码羽化半径（像素，越大过渡越柔和）
+    max_gain  : 这些区域允许的亮度放大倍数上限
+    """
+    s = float(np.clip(strength, 0.0, 1.0))
+    if s <= 0:
+        return img_rgb if enh_rgb is None else enh_rgb
+    low = np.ascontiguousarray(low_rgb)
+    g = cv2.cvtColor(low, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    m1 = cv2.boxFilter(g, -1, (5, 5))
+    m2 = cv2.boxFilter(g * g, -1, (5, 5))
+    std = np.sqrt(np.maximum(m2 - m1 * m1, 0.0))
+    mask = ((g < dark_thr) & (std < var_thr)).astype(np.float32)
+    mask = cv2.GaussianBlur(mask, (0, 0), float(max(1.0, feather))) * s
+    m = np.clip(mask, 0.0, 1.0)[..., None]
+
+    e = cv2.cvtColor(np.ascontiguousarray(enh_rgb), cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    l = cv2.cvtColor(low, cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    y_e, y_l = e[..., 0:1], l[..., 0:1]
+    target_y = np.minimum(y_e, y_l * float(max_gain))
+    e[..., 0:1] = y_e * (1.0 - m) + target_y * m
+    e[..., 1:3] = e[..., 1:3] * (1.0 - m) + 128.0 * m
+    return cv2.cvtColor(np.clip(e, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
+
+
+# ----------------------------------------------------------------------------
+# ④d 近黑区"限增益"（E8 关键一步）——解决彩色大斑块
+#     近黑区域里没有可靠的颜色信息：模型把微小噪声放大后，不同通道被放大得不一样，
+#     就会出现大片棕/绿色斑块（用户看到的“更大的马赛克”）。
+#     做法：亮度 < l0 的地方，用“中性 gamma 抬亮”（三通道同一映射）替代模型输出；
+#           l0~l1 之间线性过渡。这样既保留亮度提升，又不会产生彩色斑块。
+# ----------------------------------------------------------------------------
+def neutral_lift(low_rgb, gamma=0.40, gain=1.0):
+    """按灰度整体 gamma 抬亮（三通道同一映射 → 绝对中性，不可能产生偏色）"""
+    g = cv2.cvtColor(np.ascontiguousarray(low_rgb), cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
+    lift = np.power(np.clip(g, 0.0, 1.0), float(gamma)) * 255.0 * float(gain)
+    return np.repeat(np.clip(lift, 0, 255)[..., None], 3, axis=2)
+
+
+def limit_dark_gain(enh_rgb, low_rgb, l0=6.0, l1=20.0, gamma=0.40, strength=0.85):
+    """近黑区限增益：低照亮度 <l0 全用中性抬亮，l0~l1 线性过渡，>l1 完全用模型输出。
+
+    enh_rgb : 模型增强结果
+    low_rgb : 输入低照图
+    l0/l1   : 灰度阈值（0~255），越小越保守（只处理更黑的区域）
+    gamma   : 中性抬亮的 gamma（0.4 ≈ 明显提亮但不刺眼）
+    strength: 0~1，<1 时保留一点模型输出
+    """
+    s = float(np.clip(strength, 0.0, 1.0))
+    if s <= 0:
+        return enh_rgb
+    low = np.ascontiguousarray(low_rgb)
+    y = cv2.cvtColor(low, cv2.COLOR_RGB2GRAY).astype(np.float32)
+    m = np.clip((float(l1) - y) / max(float(l1) - float(l0), 1e-6), 0.0, 1.0)[..., None] * s
+    lift = neutral_lift(low, gamma=gamma)
+    out = np.ascontiguousarray(enh_rgb).astype(np.float32) * (1.0 - m) + lift * m
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+# ----------------------------------------------------------------------------
 # 组合管线
 # ----------------------------------------------------------------------------
 def preprocess(img_rgb, denoise=0.0, deblock_strength=0.0, prelift_amount=0.0):

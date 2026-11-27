@@ -30,8 +30,8 @@ font_manager.fontManager.addfont(FONT_PATH)
 plt.rcParams["font.family"] = "Microsoft YaHei"
 plt.rcParams["axes.unicode_minus"] = False
 
-PIPES = ["E1", "E2", "E3", "E4", "E5"]
-COLORS = ["#6B8EAE", "#C4A35A", "#8FBC8F", "#D08C7A", "#9B7FBF"]
+PIPES = ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"]
+COLORS = ["#6B8EAE", "#C4A35A", "#8FBC8F", "#D08C7A", "#9B7FBF", "#7FA6A0", "#B5747A", "#D9B44A"]
 GROUP_LABEL = {"eval15": "eval15", "LIME": "LIME", "extreme": "极端暗图", "DICM": "DICM"}
 
 
@@ -58,11 +58,11 @@ def fig_metrics(rows):
              ("M_gain", "梯度放大 M(输出)/M(输入)", None)]
     fig, axes = plt.subplots(1, 3, figsize=(17, 5.2))
     x = np.arange(len(groups))
-    w = 0.15
+    w = 0.10
     for ax, (key, title, _) in zip(axes, specs):
         for j, (pipe, col) in enumerate(zip(PIPES, COLORS)):
             vals = [avg(rows, g, pipe, key) for g in groups]
-            bars = ax.bar(x + (j - 2) * w, vals, w, label=pipe, color=col)
+            bars = ax.bar(x + (j - (len(PIPES)-1)/2) * w, vals, w, label=pipe, color=col)
             if key == "blockiness":
                 ax.axhline(1.0, color="gray", ls="--", lw=1)
             for b, v in zip(bars, vals):
@@ -153,9 +153,9 @@ def fig_strips(cases):
         top, bottom = [], []
         short = {"E0": "低照原图", "E1": "基线 Zero-DCE", "E2": "先降噪→增强",
                  "E3": "增强→后降噪", "E4": "弱降噪+平滑", "E5": "本文方案"}
-        for p in ["E0"] + PIPES:
+        for p in ["E0", "E1", "E5", "E6", "E8"]:
             t = Image.fromarray(outs[p]).resize((260, int(260 * h / w)), Image.LANCZOS)
-            top.append(_label(np.asarray(t), f"{p} {short[p]}"))
+            top.append(_label(np.asarray(t), f"{p} {short.get(p, p)}"))
             crop = Image.fromarray(outs[p][box[1]:box[3], box[0]:box[2]]).resize(
                 (cw * scale, ch * scale), Image.NEAREST)
             bottom.append(_label(np.asarray(crop), f"{p} 放大 {scale}×"))
