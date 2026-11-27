@@ -570,3 +570,44 @@ def shadow_lift(img_rgb, lift=2.0, lref=60.0):
     y = y + float(lift) * np.clip(1.0 - y / float(lref), 0.0, 1.0)
     ycc[..., 0] = np.clip(y, 0.0, 255.0)
     return cv2.cvtColor(ycc.astype(np.uint8), cv2.COLOR_YCrCb2RGB)
+
+def estimate_chroma_noise(img_rgb):
+    """估计色度噪声强度（0~255 单位），与 scripts/compare_preprocess.py 的 chroma_noise 完全同口径：
+    Cb/Cr 减高斯(sigma=1.5) 的高频残差，取两通道 std 的平均。
+    经验划分（本库 17 张暗图实测，输入图上的口径）：
+      < 0.8   → 色度本来较干净（512=0.10、132=0.17、101=0.38、147=0.40~0.47、12=0.55、493=0.74）
+                → 再降噪只会把颗粒抹平，跳过改进，输出等同原版
+      0.8~1.5 → 中等色噪（18=0.93、665=0.94）→ 轻度处理（s=0.10）
+      > 1.5   → 明显色噪（778=1.13…）→ 正常处理（s=0.20）
+    """
+    ycc = cv2.cvtColor(np.asarray(img_rgb, dtype=np.float32), cv2.COLOR_RGB2YCrCb)
+    vals = []
+    for c in (1, 2):
+        ch = ycc[..., c]
+        vals.append(float(np.std(ch - cv2.GaussianBlur(ch, (0, 0), 1.5))))
+    return float(np.mean(vals))
+
+
+def auto_decision(img_rgb, mean=None, chroma_noise=None):
+    """A 档：按图像内容决定"跳过改进 / 轻度 / 正常 / 近黑强处理"。
+
+    返回 dict(mode, s_eff, mean, chroma_noise)。
+      skip       : 极暗且色度很干净 → 直接输出原版结果（不再降噪，避免把颗粒抹平）
+      gentle     : 色度中等 → 半强度（s=0.10）
+      normal     : 常规暗图 → s=0.20
+      near_black : 均值<5 的近黑图 → s=1.0（走中性抬亮）
+    """
+    arr = np.asarray(img_rgb)
+    if mean is None:
+        mean = float(np.mean(arr))
+    if chroma_noise is None:
+        chroma_noise = estimate_chroma_noise(arr)
+    if mean < 5.0:
+        mode, s_eff = "near_black", 1.0
+    elif chroma_noise < 0.8:
+        mode, s_eff = "skip", 0.0
+    elif chroma_noise < 1.5:
+        mode, s_eff = "gentle", 0.10
+    else:
+        mode, s_eff = "normal", 0.20
+    return dict(mode=mode, s_eff=s_eff, mean=float(mean), chroma_noise=float(chroma_noise))

@@ -274,18 +274,28 @@ def main():
         try:
             # ① 增强前的预处理：auto=场景自适应（E10），否则按手动/旧预设参数
             pre = im
+            info = None
             if auto_mode:
                 # 保守自动：普通暗图用 0.45（保纹理、少造线），近黑图（均值<5）才用 1.0（压彩色大斑）
                 if args.auto_strength < 0:
-                    _m = float(np.mean(np.asarray(im.convert("L"), dtype=np.float32)))
-                    s_eff = 1.0 if _m < 5.0 else 0.20
+                    # A 档：按图像内容自动决定强度（跳过 / 轻度 / 常规 / 近黑）
+                    _dec = pp.auto_decision(np.asarray(im))
+                    s_eff = _dec["s_eff"]
+                    print(f"    [判定] 均值 {_dec['mean']:5.1f}  色度噪声 {_dec['chroma_noise']:4.2f} "
+                          f"→ {_dec['mode']}（强度 {s_eff:.2f}）")
                 else:
                     s_eff = args.auto_strength
-                info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
-                pre = Image.fromarray(info["img"])
-                print(f"    [auto] 均值 {info['mean']:5.1f}  噪声σ {info['noise']:4.2f}  "
-                      f"块效应 {info['blockiness']:.3f} → 降噪×{info['k']:.2f}  "
-                      f"去块={'开' if info['deblock'] else '关'}  轻抬={'开' if info['prelift'] else '关'}")
+                    _dec = None
+                if s_eff <= 0.0:
+                    # 跳过改进：预处理/后处理都不做，输出等价原版
+                    pre = im
+                    print("    [判定] 该图色度干净、再降噪只会抹平颗粒 → 输出等同原版")
+                else:
+                    info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
+                    pre = Image.fromarray(info["img"])
+                    print(f"    [auto] 均值 {info['mean']:5.1f}  噪声σ {info['noise']:4.2f}  "
+                          f"块效应 {info['blockiness']:.3f} → 降噪×{info['k']:.2f}  "
+                          f"去块={'开' if info['deblock'] else '关'}  轻抬={'开' if info['prelift'] else '关'}")
             elif use_pre:
                 pre = Image.fromarray(pp.preprocess(
                     np.asarray(im), denoise=args.denoise,
@@ -294,7 +304,12 @@ def main():
             _need_float = args.bit16
             raw, mode = enhance_image(net, pre, args.tile, return_float=_need_float)
             # ③ 增强后的处理：auto=近黑限增益（只动亮度）+ 近黑区掩码色度降噪；否则用旧逻辑
-            if auto_mode:
+            if auto_mode and s_eff <= 0.0:
+                # 跳过改进：直接原图结果（等价 -m sice）
+                u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
+                out_f = u8.astype(np.float32) / 255.0
+                out = out_f if args.bit16 else Image.fromarray(u8)
+            elif auto_mode:
                 u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
                 info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
                 # E10 后处理 v2（分两档）：

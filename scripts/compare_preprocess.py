@@ -86,6 +86,22 @@ def collect(paths):
     return out
 
 
+def _run_enhance_subprocess(img_path, mode="auto"):
+    """调用 enhance.py（= 用户双击的 bat 用的同一份代码）得到最终版图像。"""
+    import subprocess, tempfile
+    tmp = tempfile.mkdtemp(prefix="cmp_")
+    cmd = [sys.executable, os.path.join(ROOT, "enhance.py"), img_path,
+           "-o", tmp, "--preprocess", mode]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    stem = os.path.splitext(os.path.basename(img_path))[0]
+    # 注意：jpg 输入时 enhance.py 会存成 *_enhanced.jpg（保持扩展名），所以两种都找
+    cand = [os.path.join(tmp, stem + "_enhanced.png"), os.path.join(tmp, stem + "_enhanced.jpg")]
+    out = next((p for p in cand if os.path.exists(p)), None)
+    if r.returncode != 0 or out is None:
+        raise RuntimeError("enhance.py 失败：" + (r.stderr or r.stdout)[-800:])
+    return np.asarray(Image.open(out).convert("RGB"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("inputs", nargs="+")
@@ -109,28 +125,15 @@ def main():
             print(f"[{i}/{len(files)}] 跳过 {os.path.basename(f)}: {e}")
             continue
         base = enhance(net, rgb)
-        info = pp.auto_preprocess(rgb)
-        enh2 = enhance(net, info["img"])
-        if args.mode == "auto":
-            if info["mean"] < 5.0:
-                enh2 = pp.chroma_guided_smooth(enh2, luma_guide=enh2, radius=2, eps=1e-3, strength=0.5)
-                enh2 = pp.quantize8(pp.limit_dark_gain(enh2, rgb, l0=3.0, l1=12.0, gamma=0.55,
-                                                      strength=0.80, smooth_radius=8, dither=0.0), dither=0.4)
-            else:
-                # 与 enhance.py 对齐：只平滑“低信号平坦区”的色度、强度 0.45k、不做色度回补（避免偏色）
-                enh2 = pp.chroma_denoise_flat(enh2, rgb, info["noise"],
-                                              strength=min(1.0, max(0.2, info["k"] * 0.45)),
-                                              target_amp=None)
-                enh2 = pp.quantize8(enh2, dither=0.4)
-            tag = "去噪版"
+        dec = pp.auto_decision(rgb) if args.mode == "auto" else None
+        # 最终版必须与用户双击的 bat 完全一致：直接调用 enhance.py（同一份代码、同一个入口）
+        enh2 = _run_enhance_subprocess(f, args.mode)
+        if args.mode == "auto" and dec["mode"] == "skip":
+            tag = "去噪版(判定=跳过,等同原版)"
+        elif args.mode == "auto":
+            tag = f"去噪版({dec['mode']})"
         else:
-            pre = pp.preprocess(rgb, denoise=0.5, deblock_strength=0.5, prelift_amount=0.10)
-            e = enhance(net, pre)
-            e = pp.chroma_guided_smooth(e, luma_guide=e, radius=2, eps=1e-3, strength=0.5)
-            e = pp.limit_dark_gain(e, rgb, l0=3.0, l1=12.0, gamma=0.55, strength=0.80,
-                                   smooth_radius=8, dither=0.6)
-            enh2 = pp.quantize8(e, dither=0.6)
-            tag = "去噪版(E9)"
+            tag = f"去噪版({args.mode})"
 
         stem = os.path.splitext(os.path.basename(f))[0]
         x0, y0, bw, bh = zoom_box(rgb)
