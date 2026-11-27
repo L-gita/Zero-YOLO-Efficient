@@ -201,8 +201,8 @@ def main():
                     help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
     ap.add_argument("--auto-strength", type=float, default=-1.0,
                     help="auto 模式强度；-1=自动（A 档：按色度噪声自动 跳过/轻度/常规/近黑），1.0=强制全强度，0=完全等价原版，也可给 0~2")
-    ap.add_argument("--chroma-mode", choices=["smooth", "desat", "none"], default="none",
-                    help="auto 模式下如何处理色度：smooth=局部平滑(干净但可能出色块边界)；desat=全局等比去饱和(不产生局部台阶)；none=完全不碰色度")
+    ap.add_argument("--chroma-mode", choices=["light", "smooth", "desat", "none"], default="light",
+                    help="auto 模式下如何处理色度：light=只做轻度色度平滑(不动亮度/纹理，推荐想少噪点又想保颗粒时用)；smooth=局部平滑(更干净但可能出色块边界)；desat=全局等比去饱和；none=完全不碰色度")
     ap.add_argument("--v4-strength", type=float, default=0.9, help="v4 色度去噪强度（默认 0.9）")
     ap.add_argument("--v4-tau", type=float, default=5.0, help="v4 色度噪声阈值（越大越保守）")
     ap.add_argument("--v4-beta", type=float, default=1.6, help="v4 亮度结构保护系数（越大越保护真实彩边）")
@@ -307,8 +307,16 @@ def main():
             raw, mode = enhance_image(net, pre, args.tile, return_float=_need_float)
             # ③ 增强后的处理：auto=近黑限增益（只动亮度）+ 近黑区掩码色度降噪；否则用旧逻辑
             if auto_mode and s_eff <= 0.0:
-                # 跳过改进：直接原图结果（等价 -m sice）
+                # 跳过亮度处理：等价原版；若 --chroma-mode light，则只对色度做轻度平滑（不动亮度/纹理）
                 u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
+                if args.chroma_mode == "light":
+                    _cn = pp.estimate_chroma_noise(np.asarray(im))
+                    # 色度本来就很干净（<0.3）就不动，避免"越降越差"
+                    _s = 0.0 if _cn < 0.3 else float(min(0.35, max(0.15, 0.35 * _cn)))
+                    _noise = float(pp.estimate_noise(u8))
+                    u8 = pp.chroma_denoise_flat(u8, np.asarray(im), _noise, strength=_s, target_amp=None)
+                    u8 = pp.quantize8(np.asarray(u8, dtype=np.float32))
+                    print(f"    [light] 仅色度轻度平滑：色度噪声 {_cn:.2f} → 强度 {_s:.2f}（亮度/纹理不动）")
                 out_f = u8.astype(np.float32) / 255.0
                 out = out_f if args.bit16 else Image.fromarray(u8)
             elif auto_mode:

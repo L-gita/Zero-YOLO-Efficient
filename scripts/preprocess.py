@@ -604,7 +604,7 @@ def auto_decision(img_rgb, mean=None, chroma_noise=None):
         chroma_noise = estimate_chroma_noise(arr)
     if mean < 5.0:
         mode, s_eff = "near_black", 1.0
-    elif chroma_noise < 0.8:
+    elif chroma_noise < 1.5:
         mode, s_eff = "skip", 0.0
     elif chroma_noise < 1.5:
         mode, s_eff = "gentle", 0.10

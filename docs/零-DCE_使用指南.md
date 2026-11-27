@@ -304,7 +304,8 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 ### 12.5 A 档自动判定（2026-11-28）
 
 默认就是 A 档（`--auto-strength -1`）：程序会自己看这张图该不该处理。
-- 判为「跳过」时，输出 **等同原版**（仅保留极轻微暗部补偿），日志里会打印
-  `[判定] 均值 X 色度噪声 Y → skip`；
+- 判为「跳过」时，**亮度/纹理完全等同原版**（不加暗部补偿）；默认 `--chroma-mode light`
+  会再对色度做轻度平滑（色度噪声 <0.3 的图则完全不动），日志里会打印
+  `[判定] 均值 X 色度噪声 Y → skip` 与 `[light] 仅色度轻度平滑`；
 - 想强制全强度：`--auto-strength 1.0`；想完全不处理：`--auto-strength 0`；
 - 判定阈值在 `scripts/preprocess.py: auto_decision()`（色度噪声 <0.8 跳过 / <1.5 轻度 / 否则常规）。
