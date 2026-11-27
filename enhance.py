@@ -162,6 +162,55 @@ def _tiled(net, pil, tile=1024, overlap=128):
     return out
 
 
+def _run_with_alpha(net, arr, half=False):
+    """arr: HxWx3 float [0,1] -> (out float [0,1], r float [24,H,W])"""
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    t = torch.from_numpy(np.asarray(arr, dtype=np.float32)).permute(2, 0, 1).unsqueeze(0).to(device)
+    with torch.no_grad():
+        if half and device == "cuda":
+            with torch.autocast("cuda", dtype=torch.float16):
+                _, out, r = net(t)
+        else:
+            _, out, r = net(t)
+    return (out.float().clamp(0, 1).squeeze(0).permute(1, 2, 0).cpu().numpy(),
+            r.float().squeeze(0).cpu().numpy())
+
+
+def gain_from_alpha(r, x):
+    """由 r1..r8 计算逐像素端到端增益 d(out)/d(in)。
+
+    r: [24,H,W]（8 组 × 3 通道 alpha）；x: [H,W,3] ∈[0,1]。返回 [H,W]（通道平均）。
+    LE 是逐像素曲线：x_{k+1} = x_k + α_k(x_k²−x_k)，故 dLE/dx = 1 + α_k(2x_k−1)。
+    """
+    xc = np.asarray(x, dtype=np.float64).transpose(2, 0, 1)
+    xk = xc.copy()
+    gain = np.ones_like(xc)
+    for k in range(8):
+        a = r[3 * k:3 * k + 3]
+        gain *= (1.0 + a * (2.0 * xk - 1.0))
+        xk = xk + a * (xk * xk - xk)
+    return gain.mean(axis=0)
+
+
+def enhance_with_in_dither(net, pil, target=1.0, seed=0, max_pixels=6_000_000):
+    """输入域抖动：先估局部增益 g，再按 u = target/g 抖动输入，让输出抖动≈target 级。
+
+    见 docs：`enhance.py --dither-mode in`。大图（>6MP）自动跳过（返回普通增强结果）。
+    """
+    arr = np.asarray(pil, dtype=np.float32) / 255.0
+    if pil.size[0] * pil.size[1] > max_pixels:
+        return _run_float(net, arr), "in-dither(skip,big)"
+    out1, r = _run_with_alpha(net, arr)
+    g = gain_from_alpha(r, arr)
+    # 单位换算：arr 在 [0,1]，target 是"输出灰度级"；输入扰动量 = (target/255)/增益
+    # 例：增益 12、target=1 级 → 输入只扰 0.083 个灰度级（子量化级），经曲线放大后刚好抖动 1 级
+    u = np.clip(float(target) / 255.0 / np.maximum(g, 1.0), 1e-5, 0.4 / 255.0)
+    rng = np.random.default_rng(seed)
+    arr2 = np.clip(arr + rng.uniform(-1.0, 1.0, arr.shape) * u[..., None], 0.0, 1.0).astype(np.float32)
+    out2 = _run_float(net, arr2)
+    return out2, "in-dither(2pass)"
+
+
 def collect_inputs(paths):
     files = []
     for p in paths:
@@ -211,8 +260,15 @@ def main():
                     help="阴影补偿（Y 通道暗部抬几级）；-1=自动（输入均值<15 时抬 4 级），0=关闭")
     ap.add_argument("--dither", type=float, default=0.6,
                     help="输出 8bit 前的抖动强度（抑制条带；0.6≈0.6 个灰度级）")
+    ap.add_argument("--dither-mode", choices=["off", "out", "in"], default="off",
+                    help="抖动方式：off=不做（默认，保持旧行为）；out=在浮点输出上加抖动再取整；"
+                         "in=输入域抖动（按局部增益补偿，让 DCE 的放大帮你把台阶铺成颗粒，约 2 倍耗时）")
+    ap.add_argument("--dither-target", type=float, default=1.0,
+                    help="dither-mode=in 时目标输出抖动幅度（灰度级，默认 1.0；越大颗粒越明显）")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
     args = ap.parse_args()
+    # 新抖动模式下不再重复做旧抖动（避免双重抖动/混淆）
+    _dither_amt = 0.0 if args.dither_mode != "off" else args.dither
 
     # 预设 → 具体参数（显式给出的参数优先）
     if args.preprocess:
@@ -292,7 +348,14 @@ def main():
                     np.asarray(im), denoise=args.denoise,
                     deblock_strength=args.deblock, prelift_amount=args.prelift))
             # ② Zero-DCE 增强（bit16 时保留 float 结果，避免再被压回 8-bit）
-            raw, mode = enhance_image(net, pre, args.tile, return_float=args.bit16)
+            _need_float = args.bit16 or args.dither_mode in ("out", "in")
+            if args.dither_mode == "in":
+                raw, mode = enhance_with_in_dither(net, pre, target=args.dither_target)
+            else:
+                raw, mode = enhance_image(net, pre, args.tile, return_float=_need_float)
+                if args.dither_mode == "out" and isinstance(raw, np.ndarray):
+                    _rng = np.random.default_rng(0)
+                    raw = np.clip(raw + _rng.uniform(-args.dither, args.dither, raw.shape) / 255.0, 0.0, 1.0)
             # ③ 增强后的处理：auto=近黑限增益（只动亮度）+ 近黑区掩码色度降噪；否则用旧逻辑
             if auto_mode:
                 u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
@@ -306,19 +369,19 @@ def main():
                     u8 = pp.quantize8(pp.limit_dark_gain(
                         u8, np.asarray(im), l0=3.0, l1=12.0, gamma=args.dark_gamma,
                         strength=0.80 * s_eff, smooth_radius=args.dark_smooth, dither=0.0),
-                        dither=args.dither)
+                        dither=_dither_amt)
                 else:
                     if v4_mode:
                         # v4（A+B）：色度噪声判据 + 引导羽化，只动色度、不动亮度结构
                         _v4 = ppv4.chroma_denoise_v4(u8, strength=args.v4_strength,
                                                     tau=args.v4_tau, beta=args.v4_beta,
                                                     guide_radius=args.v4_guide)
-                        u8 = pp.quantize8(_v4.astype(np.float32), dither=args.dither)
+                        u8 = pp.quantize8(_v4.astype(np.float32), dither=_dither_amt)
                     elif args.chroma_mode == "smooth":
                         u8 = pp.chroma_denoise_flat(u8, np.asarray(im), info["noise"],
                                                     strength=min(1.2, max(0.0, info["k"] * 0.45 * s_eff)),
                                                     target_amp=None)
-                        u8 = pp.quantize8(u8, dither=args.dither)
+                        u8 = pp.quantize8(u8, dither=_dither_amt)
                     elif args.chroma_mode == "desat":
                         # 全局、等比去饱和：不产生局部平台，因此不会新增"色块分界线"
                         _ycc = cv2.cvtColor(u8.astype(np.float32), cv2.COLOR_RGB2YCrCb)
@@ -327,7 +390,7 @@ def main():
                         _ycc[..., 2] = 128 + (_ycc[..., 2] - 128) * _k
                         u8 = np.clip(cv2.cvtColor(_ycc, cv2.COLOR_YCrCb2RGB), 0, 255).astype(np.uint8)
                     else:
-                        u8 = pp.quantize8(u8.astype(np.float32), dither=args.dither)
+                        u8 = pp.quantize8(u8.astype(np.float32), dither=_dither_amt)
                 out_f = u8.astype(np.float32) / 255.0
                 out = out_f if args.bit16 else Image.fromarray(u8)
             elif use_post:
@@ -343,7 +406,7 @@ def main():
                         pp.limit_dark_gain(u8, np.asarray(im), l0=3.0, l1=12.0,
                                            gamma=args.dark_gamma, strength=args.limit_dark,
                                            smooth_radius=args.dark_smooth, dither=0.0),
-                        dither=args.dither)
+                        dither=_dither_amt)
                 if args.post > 0:
                     u8 = pp.post_smooth(u8, args.post)
                 out_f = u8.astype(np.float32) / 255.0
