@@ -64,13 +64,13 @@ MODELS = {
 # 预处理预设：--preprocess 一键选
 PRESETS = {
     # mosaic（推荐）：轻度预处理 + 亮度引导色度平滑 + 近黑区限增益（消除彩色大斑块）
-    "mosaic": dict(denoise=0.6, deblock=0.5, prelift=0.15, guided=0.7, limit_dark=0.85),
+    "mosaic": dict(denoise=0.5, deblock=0.5, prelift=0.10, guided=0.5, limit_dark=0.80, dark_gamma=0.55, dark_smooth=8, dither=0.6),
     # light（温和）：一般夜景，尽量少动细节
-    "light": dict(denoise=0.6, deblock=0.0, prelift=0.10, guided=0.5, limit_dark=0.0),
+    "light": dict(denoise=0.4, deblock=0.0, prelift=0.06, guided=0.3, limit_dark=0.0, dark_gamma=0.70, dark_smooth=8, dither=0.0),
     # dark（极暗）：更猛一点
-    "dark": dict(denoise=1.0, deblock=1.0, prelift=0.20, guided=0.8, limit_dark=1.0),
+    "dark": dict(denoise=1.0, deblock=1.0, prelift=0.20, guided=0.8, limit_dark=1.0, dark_gamma=0.50, dark_smooth=10, dither=0.6),
     # 兼容旧名字
-    "strong": dict(denoise=1.0, deblock=1.0, prelift=0.20, guided=0.8, limit_dark=1.0),
+    "strong": dict(denoise=1.0, deblock=1.0, prelift=0.20, guided=0.8, limit_dark=1.0, dark_gamma=0.50, dark_smooth=10, dither=0.6),
 }
 _net_cache = {}
 
@@ -181,6 +181,12 @@ def main():
     ap.add_argument("--guided", type=float, default=0.0, help="增强后亮度引导的色度平滑（推荐 0.5~0.8）")
     ap.add_argument("--limit-dark", type=float, default=0.0,
                     help="近黑区限增益：0=关，0.85=推荐（用中性抬亮替代彩色放大，消除大色块）")
+    ap.add_argument("--dark-gamma", type=float, default=0.55,
+                    help="近黑区中性抬亮的 gamma（越大越暗；0.55=默认，1.0=几乎不提亮）")
+    ap.add_argument("--dark-smooth", type=int, default=8,
+                    help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
+    ap.add_argument("--dither", type=float, default=0.6,
+                    help="输出 8bit 前的抖动强度（抑制条带；0.6≈0.6 个灰度级）")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
     args = ap.parse_args()
 
@@ -255,8 +261,11 @@ def main():
                     u8 = pp.chroma_guided_smooth(u8, luma_guide=u8, radius=2, eps=1e-3,
                                                  strength=args.guided)
                 if args.limit_dark > 0:
-                    u8 = pp.limit_dark_gain(u8, np.asarray(im), l0=6.0, l1=20.0,
-                                            gamma=0.40, strength=args.limit_dark)
+                    u8 = pp.quantize8(
+                        pp.limit_dark_gain(u8, np.asarray(im), l0=3.0, l1=12.0,
+                                           gamma=args.dark_gamma, strength=args.limit_dark,
+                                           smooth_radius=args.dark_smooth, dither=0.0),
+                        dither=args.dither)
                 if args.post > 0:
                     u8 = pp.post_smooth(u8, args.post)
                 out_f = u8.astype(np.float32) / 255.0

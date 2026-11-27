@@ -214,28 +214,41 @@ python C:\Users\12983\Documents\repro\scripts\pair_compare.py `
 暗光图增强后容易出现彩色花斑或块状"马赛克"——这是把原图已有的 8-bit 台阶、色度噪声、JPEG 8×8 压缩缝一起放大了；
 而且近黑区没有可靠信号，模型还可能把噪声放大成**棕/绿/紫色大斑块**。
 
-现在的方案是：**预处理（去块 → 色度优先降噪 → 暗部轻抬）→ Zero-DCE → 后处理（亮度引导色度平滑 → 近黑区限增益）**。
+现在的方案（E9，2026-11-27 定稿）：
+**预处理（去块 → 色度优先降噪 → 暗部轻抬）→ Zero-DCE → 后处理（亮度引导色度平滑 → 近黑区限增益 v2）**。
+限增益 v2 的三个关键点：**平滑亮度**（避免 8-bit 台阶变硬灰块）、**羽化掩码**、**输出抖动 ±0.6 级**（抑制条带）。
 
 ```powershell
-# 推荐档（最常用：常规暗光、色噪明显）
+# 推荐档（常规暗光、色噪明显）
 python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess mosaic -c --bit16
 
-# 温和档（怕抹细节）/ 极暗档（几乎全黑）
+# 温和档（怕抹细节、怕偏淡）/ 极暗档（几乎全黑）
 python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess light -c
 python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess dark --bit16
 
-# 单项手动控制（0 = 关闭）
-python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --denoise 0.6 --deblock 0.5 --prelift 0.15 --guided 0.7 --limit-dark 0.85
+# 单项手动控制（0 = 关闭）+ 细调
+python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --denoise 0.5 --deblock 0.5 --prelift 0.10 --guided 0.5 --limit-dark 0.80
+python C:\Users\12983\Documents\repro\enhance.py 照片.jpg --preprocess mosaic --dark-gamma 0.50 --dark-smooth 10 --dither 0.8
 
 # 不加参数 = 和以前完全一样（默认全关）
 python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 ```
 
-效果（eval15 15 对，相对"直接增强"的基线）：
-色度噪声 **12.18 → 2.01**、彩色大斑块占比 **0.022 → 0.090**（极端暗图从 14.6% 降到 0.21%）、
-亮度细节保留 75%（std8 8.91 / 11.91）、SSIM **0.5584 → 0.6835**。
+效果（eval15 15 对，相对"直接增强"基线）：
 
-> 早前那版"重降噪 + 双边滤波"（E5）虽然色噪更低，但会把近黑区抹成大片彩色斑块、图像变糊，**已被证伪**，不要再用于极暗图。
-> 全部对照（E0~E8）、专项诊断与参数说明见 `C:\Users\12983\Documents\repro\docs\零-DCE_马赛克预处理方案.md`。
+| 指标 | 基线 E1 | E8（旧，硬灰块） | **E9（推荐）** |
+| --- | --- | --- | --- |
+| 色度噪声 | 12.18 | 1.15 | **1.60** |
+| 条带跳变（越小越好） | 2.5 | 9.0 | **2.8** |
+| 极端暗图条带跳变 | 6.0 | 8.7 | **2.7** |
+| 彩色大斑块（专项诊断） | — | 0.21%（126） | 0.23% |
+| PSNR / SSIM | 15.86 / 0.5584 | 16.02 / 0.6978 | 16.02 / 0.6754 |
+
+**注意取舍：** E9 在极暗图上收益最明显（彩色斑和硬灰块都没了），但正常夜景和基线差别不大、会**略偏淡**
+（饱和度 748：0.051 → 0.034）；想保颜色就用 `--preprocess light` 或调小 `--prelift`。
+早些版本的重降噪（E5）会把近黑区抹成大片彩色斑、图像发糊，**已被证伪，别再用于极暗图**。
+
+> 全部对照（E0~E9）、专项诊断、参数说明见 `C:\Users\12983\Documents\repro\docs\零-DCE_马赛克预处理方案.md`；
+> 对比图 `demo_mosaic/e9_check/final/compare_E9_vs_base.png`。
 
 **注意：** `--bit16` 会另存一份 `_enhanced16.png`（16 位），但微信/照片查看器会压回 8 位；用 Photoshop/GIMP 才能看到位深差别。

@@ -45,6 +45,24 @@ def _to_f32(img):
 # ----------------------------------------------------------------------------
 # ① 色度优先降噪：颜色重降、亮度轻降（人眼对颜色细节不敏感）
 # ----------------------------------------------------------------------------
+def _chroma_amp(ycc):
+    return float(np.sqrt((ycc[..., 1] - 128.0) ** 2 + (ycc[..., 2] - 128.0) ** 2).mean())
+
+
+def _rescale_chroma(img_ycc, target_amp, max_gain=1.8):
+    """把 img_ycc 的色度幅度缩放到 target_amp（保色调、只调饱和），避免滤波把颜色洗白。"""
+    cur = _chroma_amp(img_ycc)
+    if cur < 1e-3:
+        return img_ycc
+    k = float(np.clip(target_amp / cur, 1.0, max_gain))
+    if abs(k - 1.0) < 1e-3:
+        return img_ycc
+    out = img_ycc.copy()
+    out[..., 1] = 128.0 + (out[..., 1] - 128.0) * k
+    out[..., 2] = 128.0 + (out[..., 2] - 128.0) * k
+    return np.clip(out, 0, 255)
+
+
 def denoise_chroma(img_rgb, strength=1.0):
     """YCrCb 空间中：Y（亮度）轻降噪，Cr/Cb（色度）重降噪。
 
@@ -54,14 +72,21 @@ def denoise_chroma(img_rgb, strength=1.0):
     if strength <= 0:
         return img_rgb
     s = float(strength)
-    ycc = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb)
+    ycc = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    amp_before = _chroma_amp(ycc)
     y, cr, cb = cv2.split(ycc)
-    h_y = 2.0 + 2.0 * s          # 亮度：轻（h=4 在 s=1）
-    h_c = 4.0 + 8.0 * s          # 色度：重（h=12 在 s=1）
-    y = cv2.fastNlMeansDenoising(y, None, h=h_y, templateWindowSize=7, searchWindowSize=15)
-    cr = cv2.fastNlMeansDenoising(cr, None, h=h_c, templateWindowSize=7, searchWindowSize=15)
-    cb = cv2.fastNlMeansDenoising(cb, None, h=h_c, templateWindowSize=7, searchWindowSize=15)
-    return cv2.cvtColor(cv2.merge([y, cr, cb]), cv2.COLOR_YCrCb2RGB)
+    h_y = 1.5 + 2.5 * s          # 亮度：轻
+    h_c = 2.0 + 6.0 * s          # 色度：重（但比 v1 的 4+8s 温和）
+    y = cv2.fastNlMeansDenoising(y.astype(np.uint8), None, h=h_y,
+                                 templateWindowSize=7, searchWindowSize=15).astype(np.float32)
+    cr = cv2.fastNlMeansDenoising(cr.astype(np.uint8), None, h=h_c,
+                                  templateWindowSize=7, searchWindowSize=15).astype(np.float32)
+    cb = cv2.fastNlMeansDenoising(cb.astype(np.uint8), None, h=h_c,
+                                  templateWindowSize=7, searchWindowSize=15).astype(np.float32)
+    out = np.stack([y, cr, cb], axis=2)
+    # 关键：NLM 会把色度往均值拉 → 颜色变淡；这里把色度幅度补回去（保色调、只调饱和）
+    out = _rescale_chroma(out, amp_before)
+    return cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
 
 
 # ----------------------------------------------------------------------------
@@ -181,12 +206,13 @@ def chroma_guided_smooth(img_rgb, luma_guide=None, radius=2, eps=1e-3, strength=
     g = cv2.cvtColor(np.ascontiguousarray(guide_rgb), cv2.COLOR_RGB2YCrCb)[:, :, 0].astype(np.float32) / 255.0
     out = ycc.copy()
     s = float(np.clip(strength, 0.0, 1.0))
+    amp_before = _chroma_amp(ycc)
     for ci in (1, 2):
         src = ycc[:, :, ci] / 255.0
         sm = guided_filter(g, src, radius=radius, eps=eps) * 255.0
         out[:, :, ci] = ycc[:, :, ci] * (1.0 - s) + sm * s
-    res = cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
-    return res
+    out = _rescale_chroma(out, amp_before)      # 平滑会把色度拉向均值 → 补回饱和度
+    return cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
 
 
 
@@ -246,48 +272,45 @@ def neutral_lift(low_rgb, gamma=0.40, gain=1.0):
     return np.repeat(np.clip(lift, 0, 255)[..., None], 3, axis=2)
 
 
-def limit_dark_gain(enh_rgb, low_rgb, l0=6.0, l1=20.0, gamma=0.40, strength=0.85):
-    """近黑区限增益：低照亮度 <l0 全用中性抬亮，l0~l1 线性过渡，>l1 完全用模型输出。
+def _smooth_luma(low, radius=8, passes=2):
+    """大核多次 box 模糊近似高斯：专门用来把近黑区的 8bit 台阶/8x8 块抹成连续梯度。"""
+    y = low.astype(np.float32).mean(axis=2) / 255.0
+    k = int(radius) * 2 + 1
+    for _ in range(max(1, passes)):
+        y = cv2.blur(y, (k, k))
+    return y
 
-    enh_rgb : 模型增强结果
-    low_rgb : 输入低照图
-    l0/l1   : 灰度阈值（0~255），越小越保守（只处理更黑的区域）
-    gamma   : 中性抬亮的 gamma（0.4 ≈ 明显提亮但不刺眼）
-    strength: 0~1，<1 时保留一点模型输出
+
+def limit_dark_gain(enh, low, l0=6.0, l1=20.0, gamma=0.40, strength=0.85,
+                    smooth_radius=8, dither=0.6, seed=0):
+    """近黑区限增益（v2）：近黑区不再直接用模型输出（会有彩色大斑），
+    改用"平滑后亮度 + 中性 gamma 抬亮"；关键是先把亮度大模糊，否则
+    输入只剩几档灰度 → 输出就是几大块硬边灰块（这正是 v1 的问题）。
+
+    enh/low: HxWx3 uint8。返回 float32 HxWx3（0~255，未加抖动，抖动在 8bit 量化时加）。
     """
-    s = float(np.clip(strength, 0.0, 1.0))
-    if s <= 0:
-        return enh_rgb
-    low = np.ascontiguousarray(low_rgb)
-    y = cv2.cvtColor(low, cv2.COLOR_RGB2GRAY).astype(np.float32)
-    m = np.clip((float(l1) - y) / max(float(l1) - float(l0), 1e-6), 0.0, 1.0)[..., None] * s
-    lift = neutral_lift(low, gamma=gamma)
-    out = np.ascontiguousarray(enh_rgb).astype(np.float32) * (1.0 - m) + lift * m
-    return np.clip(out, 0, 255).astype(np.uint8)
+    enh_f = enh.astype(np.float32)
+    low_f = low.astype(np.float32)
+    y = low_f.mean(axis=2) / 255.0
+    ys = _smooth_luma(low, radius=smooth_radius, passes=2)   # 连续化
+    lifted = (np.power(np.clip(ys, 0.0, 1.0), float(gamma)) * 255.0)[..., None]
+    neutral = np.repeat(lifted, 3, axis=2)
+    # 羽化掩码：y < l0 全中性，l0~l1 过渡，>l1 用模型
+    m = np.clip((l1 / 255.0 - y) / (max(l1 - l0, 1e-3) / 255.0), 0.0, 1.0) * float(strength)
+    sigma = max(1.0, (l1 - l0) / 4.0)
+    m = cv2.GaussianBlur(m, (0, 0), sigma)                   # 再羽化，去掉过渡带硬轮廓
+    out = m[..., None] * neutral + (1.0 - m[..., None]) * enh_f
+    return np.clip(out, 0.0, 255.0)
 
 
-# ----------------------------------------------------------------------------
-# 组合管线
-# ----------------------------------------------------------------------------
-def preprocess(img_rgb, denoise=0.0, deblock_strength=0.0, prelift_amount=0.0):
-    """增强前的预处理（顺序：先去块，再降噪，最后轻抬）。
+def quantize8(img_float, dither=0.6, seed=0):
+    """float(0~255) → uint8，可选加抖动（抑制 8bit 量化条带）。"""
+    x = np.asarray(img_float, np.float32)
+    if dither and dither > 0:
+        rng = np.random.default_rng(seed)
+        x = x + rng.uniform(-dither, dither, x.shape)
+    return np.clip(np.rint(x), 0, 255).astype(np.uint8)
 
-    顺序理由：去块会引入轻微平滑，先做可避免把降噪结果重新弄脏；
-    轻抬放最后，让降噪在“原始亮度分布”上工作更准。
-    """
-    out = img_rgb
-    if deblock_strength > 0:
-        out = deblock(out, deblock_strength)
-    if denoise > 0:
-        out = denoise_chroma(out, denoise)
-    if prelift_amount > 0:
-        out = prelift(out, prelift_amount)
-    return out
-
-
-# ----------------------------------------------------------------------------
-# 16-bit 输出
-# ----------------------------------------------------------------------------
 def save_16bit(img_float01, path):
     """把 [0,1] 的 float 图存成 16-bit PNG（避免再被压回 8-bit 丢精度）。
 
@@ -324,3 +347,40 @@ if __name__ == "__main__":
     for name, im in steps:
         mae = float(np.abs(im.astype(np.float32) - src.astype(np.float32)).mean())
         print(f"{name:<16}{float(im.mean()):>8.2f}{mae:>12.2f}")
+
+def preprocess(img_rgb, denoise=0.0, deblock_strength=0.0, prelift_amount=0.0):
+    """预处理总入口（顺序：去块 → 色度优先降噪 → 暗部轻抬）。
+
+    img_rgb: HxWx3 uint8。三项都为 0 时原样返回。
+    """
+    x = _to_u8(img_rgb)
+    if deblock_strength and deblock_strength > 0:
+        x = deblock(x, strength=float(deblock_strength))
+    if denoise and denoise > 0:
+        x = denoise_chroma(x, strength=float(denoise))
+    if prelift_amount and prelift_amount > 0:
+        x = prelift(x, amount=float(prelift_amount))
+    return x
+
+
+def chroma_boost(img_rgb, ref_rgb, strength=0.6, max_gain=1.8):
+    """把（被降噪/引导平滑冲淡的）色度按参考图幅度补回来，避免“发白发灰”。
+
+    做法：分别算 ref 与 img 在 YCrCb 里的平均色度幅度，比例 clamped 到 [1, max_gain]，
+    再按 strength 混合：out_chroma = c + strength * (gain - 1) * (c - 128)。
+    只动色度，不动亮度与色调（角度不变），所以不会引入偏色。
+    """
+    if strength <= 0:
+        return _to_u8(img_rgb)
+    ref = cv2.cvtColor(_to_u8(ref_rgb), cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    img = cv2.cvtColor(_to_u8(img_rgb), cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    amp_ref = np.sqrt((ref[..., 1] - 128.0) ** 2 + (ref[..., 2] - 128.0) ** 2).mean()
+    amp_img = np.sqrt((img[..., 1] - 128.0) ** 2 + (img[..., 2] - 128.0) ** 2).mean()
+    if amp_img < 1e-3:
+        return _to_u8(img_rgb)
+    gain = float(np.clip(amp_ref / amp_img, 1.0, max_gain))
+    k = 1.0 + float(strength) * (gain - 1.0)
+    img[..., 1] = 128.0 + (img[..., 1] - 128.0) * k
+    img[..., 2] = 128.0 + (img[..., 2] - 128.0) * k
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(img, cv2.COLOR_YCrCb2RGB)

@@ -122,6 +122,37 @@ def chroma_plateau(rgb, mask, step=6, amp_thr=8.0):
     return best / (rgb.shape[0] * rgb.shape[1])
 
 
+def _out_dark_mask(gray_u8):
+    m = gray_u8 < 40
+    if m.mean() < 0.02:
+        m = gray_u8 < 80
+    return m
+
+
+def band_jump(gray_u8, mask=None):
+    """输出图暗区内“面积>1% 的灰度级”之间的最大跳变（越大越容易出现可见条带/硬灰块）。"""
+    mask = _out_dark_mask(gray_u8) if mask is None else mask
+    v = gray_u8[mask].astype(np.int32)
+    if v.size < 100:
+        return 0
+    hist = np.bincount(np.clip(v, 0, 255), minlength=256).astype(np.float64)
+    hist /= hist.sum()
+    big = np.where(hist > 0.01)[0]
+    jumps = [int(b - a) for a, b in zip(big[:-1], big[1:]) if b - a > 1]
+    return max(jumps) if jumps else 0
+
+
+def n_levels(gray_u8, mask=None):
+    """输出图暗区内占面积>1% 的灰度级个数（越多越细腻）。"""
+    mask = _out_dark_mask(gray_u8) if mask is None else mask
+    v = gray_u8[mask].astype(np.int32)
+    if v.size < 100:
+        return 0
+    hist = np.bincount(np.clip(v, 0, 255), minlength=256).astype(np.float64)
+    hist /= hist.sum()
+    return int((hist > 0.01).sum())
+
+
 def luma_std8(rgb, mask):
     y = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)[:, :, 0].astype(np.float32)
     return float(_local_std(y, 8)[mask].mean())
@@ -225,13 +256,23 @@ def run_pipeline(name, rgb):
         return pp.suppress_low_snr(out, rgb, dark_thr=25, var_thr=5.0, strength=0.7,
                                    feather=10, max_gain=1.6)
     if name == "E8":
-        # 本文推荐：E6 + 近黑区限增益（中性抬亮替代彩色放大，消除彩色大斑块）
+        # v1（已证伪）：直接用 8bit 量化后的亮度做中性抬亮 → 只映射出少数几档，形成大片硬边灰块
         out = run_pipeline("E6", rgb)
-        return pp.limit_dark_gain(out, rgb, l0=6.0, l1=20.0, gamma=0.40, strength=0.85)
+        return pp.quantize8(
+            pp.limit_dark_gain(out, rgb, l0=6.0, l1=20.0, gamma=0.40, strength=0.85,
+                               smooth_radius=0, dither=0.0),
+            dither=0.0)
+    if name == "E9":
+        # v2（推荐）：抬亮前先大模糊亮度（连续化）+ 羽化掩码 + 8bit 抖动，消除硬边灰块
+        out = run_pipeline("E6", rgb)
+        return pp.quantize8(
+            pp.limit_dark_gain(out, rgb, l0=3.0, l1=12.0, gamma=0.55, strength=0.80,
+                               smooth_radius=8, dither=0.0),
+            dither=0.6)
     raise ValueError(name)
 
 
-PIPELINES = ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"]
+PIPELINES = ["E0", "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9"]
 DESC = {
     "E0": "低照原图（参考）",
     "E1": "原图→Zero-DCE（基线）",
@@ -241,7 +282,8 @@ DESC = {
     "E5": "旧方案：重降噪+双边（会抹出大色块）",
     "E6": "本文方案：轻预处理+亮度引导色度平滑",
     "E7": "E6 + 极暗无信号区抑制",
-    "E8": "E6 + 近黑区限增益（本文推荐）",
+    "E8": "E6 + 近黑区限增益 v1（8bit 台阶→硬边灰块，已证伪）",
+    "E9": "E6 + 近黑区限增益 v2（平滑亮度+羽化+抖动，本文推荐）",
 }
 
 
@@ -288,16 +330,18 @@ def main():
                 dark_frac=float(mask.mean()), bright_in=bright_in,
                 chroma_in=chroma_noise(rgb, mask), blockiness_in=blk_in,
                 plateau=chroma_plateau(out, mask), luma_std8=luma_std8(out, mask),
+                band_jump=band_jump(g_out), n_levels=n_levels(g_out),
             )
             rows.append(row)
+        rr = {r["pipeline"]: r for r in rows[-len(PIPELINES):]}
         print(f"[{i}/{len(items)}] {group}/{name}  {rgb.shape[1]}x{rgb.shape[0]}  "
-              f"色噪 E1={rows[-5]['chroma_noise']:.2f} → E5={rows[-1]['chroma_noise']:.2f}  "
-              f"块效应 E1={rows[-5]['blockiness']:.2f} → E5={rows[-1]['blockiness']:.2f}  ({time.time()-t0:.0f}s)")
+              f"色噪 {rr['E1']['chroma_noise']:.2f}->E9 {rr['E9']['chroma_noise']:.2f}  "
+              f"条带跳变 {rr['E8']['band_jump']:.0f}->E9 {rr['E9']['band_jump']:.0f}  ({time.time()-t0:.0f}s)")
 
     # ---- CSV
     cols = ["group", "name", "pipeline", "bright", "bright_in", "chroma_noise", "chroma_in",
             "blockiness", "blockiness_in", "M_gain", "psnr", "ssim", "dark_frac",
-            "plateau", "luma_std8"]
+            "plateau", "luma_std8", "band_jump", "n_levels"]
     csv_path = os.path.join(OUT, "metrics.csv")
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as fp:
         w = csv.DictWriter(fp, fieldnames=cols)
@@ -307,14 +351,14 @@ def main():
 
     # ---- 分组均值
     groups = list(dict.fromkeys(r["group"] for r in rows))
-    summary = ["# 马赛克预处理对照实验结果（E0~E7）", ""]
+    summary = ["# 马赛克预处理对照实验结果（E0~E9）", ""]
     summary += ["> 指标都在“输入暗区掩码”内统计；色噪/块效应/M放大 越小越好；PSNR/SSIM 只在有 GT 的 eval15 上算。", ""]
     for g in groups:
         summary.append(f"## {g}")
         summary.append("")
         has_gt = any(r["psnr"] != "" for r in rows if r["group"] == g)
-        head = "| 管线 | 说明 | 亮度 | 色噪 | 块效应比 | M放大 | 彩色块占比 | 亮度细节(std8) |"
-        sep = "| --- | --- | --- | --- | --- | --- | --- | --- |"
+        head = "| 管线 | 说明 | 亮度 | 色噪 | 块效应比 | M放大 | 彩色块占比 | 亮度细节(std8) | 条带跳变 | 暗区级数 |"
+        sep = "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
         if has_gt:
             head += " PSNR | SSIM |"
             sep += " --- | --- |"
@@ -329,7 +373,9 @@ def main():
                     f"{sum(r['blockiness'] for r in rs)/n:.3f} | "
                     f"{sum(r['M_gain'] for r in rs)/n:.2f}× | "
                     f"{sum(r['plateau'] for r in rs)/n:.4f} | "
-                    f"{sum(r['luma_std8'] for r in rs)/n:.2f} |")
+                    f"{sum(r['luma_std8'] for r in rs)/n:.2f} | "
+                    f"{sum(r['band_jump'] for r in rs)/n:.1f} | "
+                    f"{sum(r['n_levels'] for r in rs)/n:.1f} |")
             if has_gt:
                 line += (f" {sum(float(r['psnr']) for r in rs)/n:.2f} | "
                          f"{sum(float(r['ssim']) for r in rs)/n:.4f} |")

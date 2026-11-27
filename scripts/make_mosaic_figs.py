@@ -30,8 +30,8 @@ font_manager.fontManager.addfont(FONT_PATH)
 plt.rcParams["font.family"] = "Microsoft YaHei"
 plt.rcParams["axes.unicode_minus"] = False
 
-PIPES = ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8"]
-COLORS = ["#6B8EAE", "#C4A35A", "#8FBC8F", "#D08C7A", "#9B7FBF", "#7FA6A0", "#B5747A", "#D9B44A"]
+PIPES = ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9"]
+COLORS = ["#6B8EAE", "#C4A35A", "#8FBC8F", "#D08C7A", "#9B7FBF", "#7FA6A0", "#B5747A", "#D9B44A", "#4F9D69"]
 GROUP_LABEL = {"eval15": "eval15", "LIME": "LIME", "extreme": "极端暗图", "DICM": "DICM"}
 
 
@@ -152,8 +152,9 @@ def fig_strips(cases):
         scale = max(2, int(360 / max(cw, ch)))
         top, bottom = [], []
         short = {"E0": "低照原图", "E1": "基线", "E2": "先降噪", "E3": "后降噪",
-                 "E4": "弱降噪+平滑", "E5": "旧方案", "E6": "引导平滑", "E7": "抑制无信号区", "E8": "本文推荐"}
-        for p in ["E0", "E1", "E5", "E6", "E8"]:
+                 "E4": "弱降噪+平滑", "E5": "旧方案(重平滑)", "E6": "引导平滑",
+                 "E7": "抑制无信号区", "E8": "限增益v1(硬灰块)", "E9": "限增益v2(本文)"}
+        for p in ["E0", "E1", "E5", "E8", "E9"]:
             t = Image.fromarray(outs[p]).resize((260, int(260 * h / w)), Image.LANCZOS)
             top.append(_label(np.asarray(t), f"{p} {short.get(p, p)}"))
             crop = Image.fromarray(outs[p][box[1]:box[3], box[0]:box[2]]).resize(
