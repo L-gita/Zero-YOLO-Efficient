@@ -117,6 +117,11 @@ def enhance_image(net, pil, force_tile=False, return_float=False):
     arr = np.asarray(pil, dtype=np.float32) / 255.0
     if force_tile:
         return _tiled(net, pil), "tile(force)"
+    # 超大图（>6MP）直接分块：整图 fp32 会把中间特征图撑到 GB 级（显存 OOM 后本机内存也会被拖垮）
+    W0, H0 = pil.size
+    if W0 * H0 > 6_000_000:
+        out = _tiled(net, pil)
+        return (out if return_float else out), "tile(auto,big)"
     try:
         out = _run_float(net, arr)
         mode = "full/fp32"
@@ -284,8 +289,8 @@ def main():
                 else:
                     amp_ref = pp.chroma_amp(u8)
                     u8 = pp.chroma_denoise_flat(u8, np.asarray(im), info["noise"],
-                                                strength=min(1.5, max(0.0, info["k"] * 0.7 * args.auto_strength)),
-                                                target_amp=amp_ref * 0.98)
+                                                strength=min(1.2, max(0.0, info["k"] * 0.45 * args.auto_strength)),
+                                                target_amp=None)
                     u8 = pp.quantize8(u8, dither=args.dither)
                 out_f = u8.astype(np.float32) / 255.0
                 out = out_f if args.bit16 else Image.fromarray(u8)

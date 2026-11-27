@@ -479,10 +479,12 @@ def auto_preprocess(low):
     if blk > 1.03:
         x = deblock(x, strength=min(1.0, (blk - 1.0) * 6.0))
         did_deblock = True
-    x = chroma_denoise_hf(x, strength=1.0 * k, lf_sigma=8.0)
+    # 只对亮度做轻度降噪：色度降噪留给"增强后、低信号平坦区"（在输入上动色度会造成偏色，
+    # 因为 Zero-DCE 的曲线是逐通道独立的，输入色度一变，输出颜色就跟着偏）
+    x = luma_denoise(x, h=0.8 + 0.15 * k)
     did_prelift = False
-    if gray_mean < 8.0:
-        x = prelift(x, amount=0.10)
+    if gray_mean < 4.0:      # 只有"几乎全黑"才轻抬，避免正常暗图被抬亮后变淡
+        x = prelift(x, amount=0.08)
         did_prelift = True
     return dict(img=x, mean=gray_mean, noise=noise, blockiness=blk, k=k,
                 deblock=did_deblock, prelift=did_prelift)
@@ -531,3 +533,12 @@ def chroma_denoise_flat(img_rgb, low, sigma, strength=1.0, target_amp=None,
 def chroma_amp(img_rgb):
     """RGB(uint8) 的色度幅度均值（供外部在不 import cv2 时调用）。"""
     return _chroma_amp(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32))
+
+def luma_denoise(img_rgb, h=2.0, template=7, search=15):
+    """只对亮度通道做非局部均值降噪（不动色度，避免偏色）。"""
+    ycc = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb)
+    y = cv2.fastNlMeansDenoising(ycc[..., 0], None, h=float(h),
+                                 templateWindowSize=template, searchWindowSize=search)
+    out = ycc.copy()
+    out[..., 0] = y
+    return cv2.cvtColor(out, cv2.COLOR_YCrCb2RGB)

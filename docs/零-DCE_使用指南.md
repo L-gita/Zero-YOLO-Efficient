@@ -266,3 +266,9 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 - 想用旧版 E9（极端暗图很干净、但正常夜景会发灰）→ `--preprocess mosaic`
 - 输出 16bit PNG 避免 8bit 条带 → 加 `--bit16`
 
+## 12. 调参速查（auto v3，2026-11-27）
+
+- **偏绿 / 太重** → `--auto-strength 0.5`（再不行用 `--preprocess light`）
+- **噪点多 / 想更强** → `--auto-strength 1.3`（更狠用 `--preprocess dark`）
+- **大图（>6 MP）** 自动分块，12 MP 约 11 s；内存不够不会再报 CUDA OOM
+- 预处理阶段只对**亮度**降噪（不碰输入色度），色度降噪只在增强后的“低信号平坦区”做 → 不会再整体偏绿

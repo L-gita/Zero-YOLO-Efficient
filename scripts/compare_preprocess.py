@@ -14,9 +14,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CODE = os.path.join(ROOT, "Zero-DCE", "Zero-DCE_code")
+# 顺序很重要：先把 ROOT 放最前（repro\enhance.py 在这里），再是 scripts，最后是代码目录
 sys.path.insert(0, CODE)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, ROOT)
 import model  # noqa: E402
+import enhance as EN  # noqa: E402  # 复用它的 OOM 降级（fp16 → 分块）
 import preprocess as pp  # noqa: E402
 
 FONT = r"C:\Windows\Fonts\msyh.ttc"
@@ -25,17 +28,14 @@ CKPT = os.path.join(CODE, "snapshots_sice", "Epoch50.pth")
 
 
 def load_net():
-    net = model.enhance_net_nopool().cuda()
-    net.load_state_dict(torch.load(CKPT, map_location="cuda", weights_only=True))
-    net.eval()
-    return net
+    # 复用 enhance.py 的加载逻辑（CUDA 不可用时自动退化）
+    return EN.get_net(CKPT)
 
 
 def enhance(net, rgb):
-    t = torch.from_numpy(rgb.astype(np.float32) / 255.).permute(2, 0, 1).unsqueeze(0).cuda()
-    with torch.no_grad():
-        _, o, _ = net(t)
-    return np.clip(o[0].permute(1, 2, 0).cpu().numpy() * 255., 0, 255).astype(np.uint8)
+    """整图推理；显存不够时 enhance.py 内部会自动降级 fp16 → 分块，避免 CUDA OOM 崩溃"""
+    out, _mode = EN.enhance_image(net, Image.fromarray(rgb))
+    return np.ascontiguousarray(np.asarray(out))
 
 
 def chroma_noise(rgb):
@@ -117,10 +117,10 @@ def main():
                 enh2 = pp.quantize8(pp.limit_dark_gain(enh2, rgb, l0=3.0, l1=12.0, gamma=0.55,
                                                       strength=0.80, smooth_radius=8, dither=0.0), dither=0.4)
             else:
-                amp_ref = pp.chroma_amp(enh2)
+                # 与 enhance.py 对齐：只平滑“低信号平坦区”的色度、强度 0.45k、不做色度回补（避免偏色）
                 enh2 = pp.chroma_denoise_flat(enh2, rgb, info["noise"],
-                                              strength=min(1.0, max(0.35, info["k"] * 0.7)),
-                                              target_amp=amp_ref * 0.98)
+                                              strength=min(1.0, max(0.2, info["k"] * 0.45)),
+                                              target_amp=None)
                 enh2 = pp.quantize8(enh2, dither=0.4)
             tag = "auto(E10)"
         else:
