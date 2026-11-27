@@ -18,13 +18,13 @@ r"""用 Zero-DCE 增强自己的照片（可选：马赛克预处理 + 16-bit �
     --prelift FLOAT       增强前暗部轻抬（0=关；0.15=推荐）
     --post FLOAT          增强后保边平滑（0=关；1=推荐）
     --bit16               输出 16-bit PNG（避免再被压回 8-bit）
-    --preprocess preset   一键预设：mosaic（推荐整套）/ light / strong
+    --preprocess preset   一键预设：auto（推荐，E10 场景自适应）/ mosaic（旧版 E9）/ light / dark
 
 例：
     python enhance.py D:\照片\夜景.jpg
     python enhance.py D:\照片\全家福 -o D:\增强结果 -c
     python enhance.py "D:\照片\夜景.jpg" -m official
-    python enhance.py "D:\照片\夜景.jpg" --preprocess mosaic -c      # 治马赛克
+    python enhance.py "D:\照片\夜景.jpg" --preprocess auto -c        # 治马赛克（推荐）
 """
 import argparse
 import glob
@@ -63,6 +63,10 @@ MODELS = {
 }
 # 预处理预设：--preprocess 一键选
 PRESETS = {
+    # auto = E10 场景自适应：先估噪声/块效应，再决定要不要降噪/去块/轻抬；
+    # 后处理只在暗图上做"只动亮度"的近黑限增益 + 近黑区掩码色度降噪
+    "auto": dict(denoise=-1.0, deblock=-1.0, prelift=-1.0, guided=0.0, limit_dark=-1.0,
+                 dark_gamma=0.60, dark_smooth=8, dither=0.4),
     # mosaic（推荐）：轻度预处理 + 亮度引导色度平滑 + 近黑区限增益（消除彩色大斑块）
     "mosaic": dict(denoise=0.5, deblock=0.5, prelift=0.10, guided=0.5, limit_dark=0.80, dark_gamma=0.55, dark_smooth=8, dither=0.6),
     # light（温和）：一般夜景，尽量少动细节
@@ -173,7 +177,7 @@ def main():
     ap.add_argument("-s", "--scale", type=int, default=0, help="长边缩放到 N 像素（0=不缩放）")
     ap.add_argument("--tile", action="store_true", help="强制分块处理")
     # 马赛克预处理
-    ap.add_argument("--preprocess", default=None, help="预设：mosaic|light|strong")
+    ap.add_argument("--preprocess", default=None, help="预设：auto（推荐，场景自适应）| mosaic（旧版）| light | dark | strong")
     ap.add_argument("--denoise", type=float, default=0.0, help="色度优先降噪强度（0=关, 1=推荐）")
     ap.add_argument("--deblock", type=float, default=0.0, help="JPEG 去块强度（0=关, 1=推荐）")
     ap.add_argument("--prelift", type=float, default=0.0, help="增强前暗部轻抬（0=关, 0.15=推荐）")
@@ -209,9 +213,13 @@ def main():
         if args.limit_dark == 0.0:
             args.limit_dark = p["limit_dark"]
 
+    auto_mode = (args.preprocess or "").lower() == "auto" or args.denoise < 0
     use_pre = (args.denoise > 0 or args.deblock > 0 or args.prelift > 0)
     use_post = (args.post > 0 or args.guided > 0 or args.limit_dark > 0)
-    if use_pre or use_post:
+    if auto_mode:
+        print("[预处理] auto 场景自适应（E10）：先估噪声/块效应，再按需降噪/去块/轻抬；"
+              "暗图才做近黑限增益")
+    elif use_pre or use_post:
         print(f"[预处理] 去块={args.deblock:g}  色度降噪={args.denoise:g}  "
               f"暗部轻抬={args.prelift:g}  | 后处理: 引导平滑={args.guided:g}  "
               f"近黑限增益={args.limit_dark:g}  16bit={args.bit16}")
@@ -243,16 +251,32 @@ def main():
 
         t0 = time.time()
         try:
-            # ① 增强前的预处理（去块 → 降噪 → 轻抬）
+            # ① 增强前的预处理：auto=场景自适应（E10），否则按手动/旧预设参数
             pre = im
-            if use_pre:
+            if auto_mode:
+                info = pp.auto_preprocess(np.asarray(im))
+                pre = Image.fromarray(info["img"])
+                print(f"    [auto] 均值 {info['mean']:5.1f}  噪声σ {info['noise']:4.2f}  "
+                      f"块效应 {info['blockiness']:.3f} → 降噪×{info['k']:.2f}  "
+                      f"去块={'开' if info['deblock'] else '关'}  轻抬={'开' if info['prelift'] else '关'}")
+            elif use_pre:
                 pre = Image.fromarray(pp.preprocess(
                     np.asarray(im), denoise=args.denoise,
                     deblock_strength=args.deblock, prelift_amount=args.prelift))
             # ② Zero-DCE 增强（bit16 时保留 float 结果，避免再被压回 8-bit）
             raw, mode = enhance_image(net, pre, args.tile, return_float=args.bit16)
-            # ③ 增强后的处理：引导平滑 → 近黑限增益（→ 可选双边）
-            if use_post:
+            # ③ 增强后的处理：auto=近黑限增益（只动亮度）+ 近黑区掩码色度降噪；否则用旧逻辑
+            if auto_mode:
+                u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
+                info = pp.auto_preprocess(np.asarray(im))
+                if info["mean"] < 20.0:      # 正常亮度的图不做后处理，避免发灰/发糊
+                    u8 = pp.limit_dark_luma(u8, np.asarray(im), thr=2.5, feather=3.0,
+                                            gamma=args.dark_gamma, strength=0.9, chroma_k=0.85)
+                    u8 = pp.masked_chroma_denoise(u8, np.asarray(im), thr=6.0, strength=2.2)
+                    u8 = pp.quantize8(u8, dither=args.dither)
+                out_f = u8.astype(np.float32) / 255.0
+                out = out_f if args.bit16 else Image.fromarray(u8)
+            elif use_post:
                 if isinstance(raw, np.ndarray) and raw.dtype != np.uint8:
                     u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8)
                 else:

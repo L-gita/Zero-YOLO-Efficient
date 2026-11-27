@@ -214,12 +214,17 @@ python C:\Users\12983\Documents\repro\scripts\pair_compare.py `
 暗光图增强后容易出现彩色花斑或块状"马赛克"——这是把原图已有的 8-bit 台阶、色度噪声、JPEG 8×8 压缩缝一起放大了；
 而且近黑区没有可靠信号，模型还可能把噪声放大成**棕/绿/紫色大斑块**。
 
-现在的方案（E9，2026-11-27 定稿）：
+现在的方案：先做 **E10 场景自适应（`--preprocess auto`，推荐）**，旧的 E9 固定管线保留在 `mosaic` 档。
+
+旧方案（E9）：
 **预处理（去块 → 色度优先降噪 → 暗部轻抬）→ Zero-DCE → 后处理（亮度引导色度平滑 → 近黑区限增益 v2）**。
 限增益 v2 的三个关键点：**平滑亮度**（避免 8-bit 台阶变硬灰块）、**羽化掩码**、**输出抖动 ±0.6 级**（抑制条带）。
 
 ```powershell
-# 推荐档（常规暗光、色噪明显）
+# 推荐档（E10 场景自适应：自动判断要不要降噪/去块/轻抬，正常夜景不会被洗淡）
+python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess auto -c --bit16
+
+# 旧版固定管线（E9：极暗图压得更狠，但正常夜景会发灰、天空可能有色块）
 python C:\Users\12983\Documents\repro\enhance.py 你的照片.jpg --preprocess mosaic -c --bit16
 
 # 温和档（怕抹细节、怕偏淡）/ 极暗档（几乎全黑）
