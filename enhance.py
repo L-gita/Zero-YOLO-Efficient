@@ -258,7 +258,7 @@ def main():
     ap.add_argument("--v4-guide", type=int, default=16, help="v4 权重羽化半径（像素）")
     ap.add_argument("--shadow-lift", type=float, default=-1.0,
                     help="阴影补偿（Y 通道暗部抬几级）；-1=自动（输入均值<15 时抬 4 级），0=关闭")
-    ap.add_argument("--dither", type=float, default=0.6,
+    ap.add_argument("--dither", type=float, default=0.0,
                     help="输出 8bit 前的抖动强度（抑制条带；0.6≈0.6 个灰度级）")
     ap.add_argument("--dither-mode", choices=["off", "out", "in"], default="off",
                     help="抖动方式：off=不做（默认，保持旧行为）；out=在浮点输出上加抖动再取整；"
