@@ -556,3 +556,17 @@ def luma_denoise(img_rgb, h=2.0, template=7, search=15, strength=1.0):
     out = ycc.copy()
     out[..., 0] = ycc[..., 0] * (1.0 - s) + yd * s
     return cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB)
+
+# ----------------------------------------------------------------------------
+# ⑥ 阴影补偿：近黑图增强后暗部会略变暗（去噪去掉噪声正向偏置 + 曲线不稳定），
+#    在 Y 通道暗部抬 1~3 级，把"阴影被加重"找回来。只作用于很暗的像素。
+# ----------------------------------------------------------------------------
+def shadow_lift(img_rgb, lift=2.0, lref=60.0):
+    """在亮度通道对暗部抬 lift 个灰度级（越暗抬得越多，lref 以上不抬）。"""
+    if lift <= 0:
+        return img_rgb
+    ycc = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2YCrCb).astype(np.float32)
+    y = ycc[..., 0]
+    y = y + float(lift) * np.clip(1.0 - y / float(lref), 0.0, 1.0)
+    ycc[..., 0] = np.clip(y, 0.0, 255.0)
+    return cv2.cvtColor(ycc.astype(np.uint8), cv2.COLOR_YCrCb2RGB)

@@ -328,3 +328,10 @@ python enhance.py 图.jpg --preprocess v4 --v4-strength 1.3   # 更强（更干�
 - 代价：彩色颗粒噪声保留（比强降噪版脏一点）；
 - 想要更干净（可能出色块）：`--auto-strength 0.45 --chroma-mode smooth`；
 - 想看"全局去饱和而不造平台"：`--auto-strength 0.25 --chroma-mode desat`。
+
+### 12.4 阴影补偿（`--shadow-lift`，2026-11-27）
+
+很暗的图（输入均值 < 15）增强后暗部会略变暗（约 1~1.5 级）。默认已自动补偿 4 级（只抬 Y 通道暗部，`lref=60` 以上不抬）。
+- 关掉：`--shadow-lift 0`
+- 加钱/减钱：`--shadow-lift 2`（更轻）/ `--shadow-lift 6`（更亮）
+- 亮图（均值 ≥ 15）自动不启用，不影响观感。

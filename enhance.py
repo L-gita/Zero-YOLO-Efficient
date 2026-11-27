@@ -207,6 +207,8 @@ def main():
     ap.add_argument("--v4-tau", type=float, default=5.0, help="v4 色度噪声阈值（越大越保守）")
     ap.add_argument("--v4-beta", type=float, default=1.6, help="v4 亮度结构保护系数（越大越保护真实彩边）")
     ap.add_argument("--v4-guide", type=int, default=16, help="v4 权重羽化半径（像素）")
+    ap.add_argument("--shadow-lift", type=float, default=-1.0,
+                    help="阴影补偿（Y 通道暗部抬几级）；-1=自动（输入均值<15 时抬 4 级），0=关闭")
     ap.add_argument("--dither", type=float, default=0.6,
                     help="输出 8bit 前的抖动强度（抑制条带；0.6≈0.6 个灰度级）")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
@@ -354,6 +356,19 @@ def main():
             continue
         dt = time.time() - t0
 
+        # 阴影补偿（只对很暗的图）：找回"阴影被加重"的 1~3 级
+        _lift = args.shadow_lift
+        if _lift < 0:
+            _m = float(np.mean(np.asarray(im.convert("L"), dtype=np.float32)))
+            _lift = 4.0 if _m < 15.0 else 0.0
+        if _lift > 0:
+            if args.bit16:
+                _u8 = (np.clip(out_f, 0, 1) * 255.0 + 0.5).astype(np.uint8)
+                out_f = pp.shadow_lift(_u8, lift=_lift).astype(np.float32) / 255.0
+                out = out_f
+            else:
+                _u8 = np.asarray(out if isinstance(out, Image.Image) else out, dtype=np.uint8)
+                out = Image.fromarray(pp.shadow_lift(_u8, lift=_lift))
         base = os.path.splitext(os.path.basename(f))[0]
         save_jpg = args.jpg or os.path.splitext(f)[1].lower() in (".jpg", ".jpeg")
         if args.bit16:
