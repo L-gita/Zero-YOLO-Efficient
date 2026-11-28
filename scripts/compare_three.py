@@ -1,10 +1,10 @@
-"""四版本对比：输入 / 原版 Zero-DCE / 最终版(auto) / 单图分区混合(region)
+"""三版本对比：输入 / 原版 Zero-DCE / 最终版(auto)
 
 用法：
   python scripts\\compare_four.py 图片或文件夹... [-o 输出目录] [--per-sheet 4]
 
 输出（默认 <第一个输入旁的>对比_四版本）：
-  *_四版本.png     每张图一行：输入 | 原版 | 最终版 | 单图分区混合
+  *_三版本.png     每张图一行：输入 | 原版 | 最终版
   metrics.csv      每张图的亮度 / 色度噪声 / 细节 std8 / 暗区条带
   summary.md       均值表 + 判定分支说明
 
@@ -117,7 +117,7 @@ def main():
     if not files:
         print("没有找到图片")
         return 1
-    out = args.out or os.path.join(os.path.dirname(files[0]), "对比_四版本")
+    out = args.out or os.path.join(os.path.dirname(files[0]), "对比_三版本")
     os.makedirs(out, exist_ok=True)
 
     rows, tiles = [], []
@@ -129,25 +129,19 @@ def main():
         cache = os.path.join(out, "_raw")
         base = run_enhance(f, ["-m", "sice"], "base", cache)
         final = run_enhance(f, ["--preprocess", "auto"], "final", cache)
-        region = run_enhance(f, ["--preprocess", "region"], "region", cache)
-        m_b, m_f, m_r = metrics(base), metrics(final), metrics(region)
+        m_b, m_f = metrics(base), metrics(final)
         rows.append(dict(file=os.path.basename(f), mode=dec["mode"], chroma_noise=round(dec["chroma_noise"], 3),
                          bright_in=m_in["bright"], bright_base=m_b["bright"], bright_final=m_f["bright"],
-                         bright_region=m_r["bright"],
                          chroma_in=m_in["chroma"], chroma_base=m_b["chroma"], chroma_final=m_f["chroma"],
-                         chroma_region=m_r["chroma"],
                          std8_in=m_in["std8"], std8_base=m_b["std8"], std8_final=m_f["std8"],
-                         std8_region=m_r["std8"],
-                         jump_in=m_in["jump"], jump_base=m_b["jump"], jump_final=m_f["jump"],
-                         jump_region=m_r["jump"]))
+                         jump_in=m_in["jump"], jump_base=m_b["jump"], jump_final=m_f["jump"]))
         mode_cn = {"near_black": "近黑", "skip": "仅色度", "normal": "常规"}.get(dec["mode"], dec["mode"])
         tiles.append(np.hstack([
             label(tile(low), f"{os.path.basename(f)}", f"输入·{mode_cn}·{m_in['chroma']}"),
             label(tile(base), "原版", f"{m_b['chroma']}"),
             label(tile(final), "最终版", f"{m_f['chroma']}"),
-            label(tile(region), "分区混合", f"{m_r['chroma']}"),
         ]))
-        print(f"[{i}/{len(files)}] {os.path.basename(f)}  {mode_cn}  色噪 {m_b['chroma']}→{m_f['chroma']}(最终)/{m_r['chroma']}(分区)")
+        print(f"[{i}/{len(files)}] {os.path.basename(f)}  {mode_cn}  色噪 {m_b['chroma']}→{m_f['chroma']}")
 
     with open(os.path.join(out, "metrics.csv"), "w", newline="", encoding="utf-8-sig") as fp:
         w = csv.DictWriter(fp, fieldnames=list(rows[0].keys()))
@@ -158,12 +152,11 @@ def main():
         vals = [r[f"{key}_{sub}"] for r in rows]
         return sum(vals) / len(vals)
 
-    lines = ["# 四版本对比（输入 / 原版 / 最终版 / 单图分区混合）", "",
-             "| 指标 | 输入 | 原版 | 最终版 auto | 单图分区混合 |", "|---|---|---|---|---|"]
+    lines = ["# 三版本对比（输入 / 原版 / 最终版 / 单图分区混合）", "",
+             "| 指标 | 输入 | 原版 | 最终版 auto |", "|---|---|---|---|"]
     for key, name in [("bright", "平均亮度"), ("chroma", "色度噪声"), ("std8", "细节 std8"), ("jump", "暗区条带跳变")]:
-        lines.append(f"| {name} | {avg(key,'in'):.3f} | {avg(key,'base'):.3f} | {avg(key,'final'):.3f} | {avg(key,'region'):.3f} |")
-    lines += ["", "分支说明：近黑分支（均值<5，中性抬亮）/ 仅色度（σc<1.5，只做色度轻平滑、亮度不动）/ 常规暗图（σc≥1.5）。",
-              "单图分区混合 = `--preprocess region`（按局部亮度分位给暗区做中性抬亮、亮区保持原版；测试版）。"]
+        lines.append(f"| {name} | {avg(key,'in'):.3f} | {avg(key,'base'):.3f} | {avg(key,'final'):.3f} |")
+    lines += ["", "分支说明：近黑分支（均值<5，中性抬亮）/ 仅色度（σc<1.5，只做色度轻平滑、亮度不动）/ 常规暗图（σc≥1.5）。"]
     with open(os.path.join(out, "summary.md"), "w", encoding="utf-8") as fp:
         fp.write("\n".join(lines) + "\n")
 
@@ -174,7 +167,7 @@ def main():
         grp = [np.pad(t, ((0, 0), (0, wmax - t.shape[1]), (0, 0)), constant_values=24) for t in grp]
         fnt = ImageFont.truetype(FONT_PATH, 16)
         head = Image.new("RGB", (wmax, 30), (32, 32, 32))
-        ImageDraw.Draw(head).text((6, 6), "列：输入 → 原版 Zero-DCE → 最终版(auto) → 单图分区混合(测试)   ｜   每格第二行=色度噪声（越小越干净）",
+        ImageDraw.Draw(head).text((6, 6), "列：输入 → 原版 Zero-DCE → 最终版(auto)   ｜   每格第二行=色度噪声（越小越干净）",
                                    font=fnt, fill=(235, 235, 235))
         p = os.path.join(out, f"sheet_{gi // per + 1}.png")
         Image.fromarray(np.vstack([np.asarray(head)] + grp)).save(p)

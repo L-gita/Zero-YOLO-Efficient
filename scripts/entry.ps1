@@ -7,7 +7,7 @@
 #   edge     → 仅边缘增强版（论文 4.9~4.12 的 Sobel 边缘损失，无马赛克预处理）
 #   mosaic   → 去马赛克最终版（auto v3 场景自适应预处理，不含边缘损失）
 $Entry = "$($env:ZERODCE_ENTRY)".Trim().ToLower()
-if ($Entry -notin @('original', 'edge', 'mosaic', 'region')) { $Entry = 'mosaic' }
+if ($Entry -notin @('original', 'edge', 'mosaic')) { $Entry = 'mosaic' }
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms | Out-Null
@@ -23,7 +23,6 @@ $cfg = switch ($Entry) {
     'original' { @{ Title = 'Zero 原版（不加任何改进）'; DirName = 'Zero原版结果'; Args = @('-m', 'sice') } }
     'edge'     { @{ Title = '仅边缘增强版（Sobel 边缘损失）'; DirName = '边缘增强结果'; Args = @('-m', 'edge') } }
     'mosaic'   { @{ Title = '去马赛克最终版（场景自适应预处理）'; DirName = '去马赛克最终版结果'; Args = @('--preprocess', 'auto') } }
-    'region'   { @{ Title = '单图分区增强（暗区单独处理，亮区保持原版）'; DirName = '单图分区增强结果'; Args = @('--preprocess', 'region', '--region-mode', 'gain') } }
 }
 
 function Collect-Files($paths) {
@@ -65,10 +64,6 @@ Write-Host "版本：$($cfg.Title)" -ForegroundColor Cyan
 Write-Host "共 $($files.Count) 张，输出目录：$outDir" -ForegroundColor DarkGray
 if ($Entry -eq 'edge') {
     Write-Host "  使用权重 snapshots_sice_edge\Epoch49.pth（50 轮，λ=0.22）" -ForegroundColor DarkGray
-} elseif ($Entry -eq 'region') {
-    Write-Host "  分区增强：按局部亮度分位找暗区，暗区用 gamma 提亮（保纹理）、亮区保持原版；并做暗区色度平滑" -ForegroundColor DarkGray
-} elseif ($Entry -eq 'mosaic') {
-    Write-Host "  最终版：按噪声/块效应自适应——只对亮度降噪、去块按需、暗部补偿；不碰色度（不造色块）" -ForegroundColor DarkGray
 }
 Write-Host ""
 

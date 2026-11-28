@@ -79,9 +79,6 @@ PRESETS = {
     # 后处理只在暗图上做"只动亮度"的近黑限增益 + 近黑区掩码色度降噪
     "auto": dict(denoise=-1.0, deblock=-1.0, prelift=-1.0, guided=0.0, limit_dark=-1.0,
                  dark_gamma=0.60, dark_smooth=8),
-    # region = 分区自适应：全局不做预处理，按"局部亮度分位 / 局部色度噪声"逐像素决定处理强度
-    "region": dict(denoise=-1.0, deblock=0.0, prelift=0.0, guided=0.0, limit_dark=0.0,
-                   dark_gamma=0.55, dark_smooth=8),
     # mosaic（推荐）：轻度预处理 + 亮度引导色度平滑 + 近黑区限增益（消除彩色大斑块）
     "mosaic": dict(denoise=0.5, deblock=0.5, prelift=0.10, guided=0.5, limit_dark=0.80, dark_gamma=0.55, dark_smooth=8),
     # v4：保守预处理 + A+B 色度去噪（色度噪声判据 + 引导羽化），只动色度不动亮度结构
@@ -200,7 +197,7 @@ def main():
     ap.add_argument("-s", "--scale", type=int, default=0, help="长边缩放到 N 像素（0=不缩放）")
     ap.add_argument("--tile", action="store_true", help="强制分块处理")
     # 马赛克预处理
-    ap.add_argument("--preprocess", default=None, help="预设：auto（推荐，场景自适应）| mosaic（旧版）| light | dark | strong")
+    ap.add_argument("--preprocess", default=None, help="预设：auto（推荐，场景自适应）| light | dark | strong（旧预设 mosaic 仍可用）")
     ap.add_argument("--denoise", type=float, default=0.0, help="色度优先降噪强度（0=关, 1=推荐）")
     ap.add_argument("--deblock", type=float, default=0.0, help="JPEG 去块强度（0=关, 1=推荐）")
     ap.add_argument("--prelift", type=float, default=0.0, help="增强前暗部轻抬（0=关, 0.15=推荐）")
@@ -246,9 +243,10 @@ def main():
             args.limit_dark = p["limit_dark"]
 
     _pp = (args.preprocess or "").lower()
+    if _pp and _pp not in PRESETS:
+        raise SystemExit(f"未知的 --preprocess 预设：{_pp}（可选：{', '.join(PRESETS)}）")
     v4_mode = _pp == "v4"
-    region_mode = _pp == "region"
-    auto_mode = _pp in ("auto", "v4", "region") or args.denoise < 0
+    auto_mode = _pp in ("auto", "v4") or args.denoise < 0
     use_pre = (args.denoise > 0 or args.deblock > 0 or args.prelift > 0)
     use_post = (args.post > 0 or args.guided > 0 or args.limit_dark > 0)
     if auto_mode:
@@ -296,11 +294,8 @@ def main():
                     # A 档：按图像内容自动决定强度（跳过 / 轻度 / 常规 / 近黑）
                     _dec = pp.auto_decision(np.asarray(im))
                     s_eff = _dec["s_eff"]
-                    if region_mode:  # 分区模式：全局不处理，交给后处理按区域决定
-                        s_eff = 0.0
-                    if not region_mode:
-                        print(f"    [判定] 均值 {_dec['mean']:5.1f}  色度噪声 {_dec['chroma_noise']:4.2f} "
-                              f"→ {_dec['mode']}（强度 {s_eff:.2f}）")
+                    print(f"    [判定] 均值 {_dec['mean']:5.1f}  色度噪声 {_dec['chroma_noise']:4.2f} "
+                          f"→ {_dec['mode']}（强度 {s_eff:.2f}）")
                 else:
                     s_eff = args.auto_strength
                     _dec = None
@@ -308,8 +303,7 @@ def main():
                     # 跳过改进：预处理/后处理都不做，输出与 "-m sice" 逐像素一致（含不加暗部补偿）
                     pre = im
                     _skipped = True
-                    if not region_mode:
-                        print("    [判定] 该图色度干净、再降噪只会抹平颗粒 → 输出等同原版")
+                    print("    [判定] 该图色度干净、再降噪只会抹平颗粒 → 输出等同原版")
                 else:
                     info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
                     pre = Image.fromarray(info["img"])
@@ -327,17 +321,7 @@ def main():
             if auto_mode and s_eff <= 0.0:
                 # 跳过亮度处理：等价原版；若 --chroma-mode light，则只对色度做轻度平滑（不动亮度/纹理）
                 u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
-                if region_mode:
-                    _yl = pp.local_luma(np.asarray(im))
-                    _p20 = float(np.percentile(_yl, 20))
-                    _p50 = float(np.percentile(_yl, 50))
-                    _wfrac = float((_yl < _p20).mean())
-                    u8 = pp.region_adaptive(u8, np.asarray(im),
-                                            q_lo=25.0, q_hi=55.0, dark_strength=0.60, dark_gamma=0.55,
-                                            chroma_lo=1.5, chroma_hi=2.5, chroma_strength=0.50)
-                    print(f"    [region] 局部亮度 P20={_p20:.1f} P50={_p50:.1f} 暗区占比≈{_wfrac*100:.0f}% "
-                          f"→ 暗区混入中性抬亮 + 暗区色度平滑；亮区=原版")
-                if args.chroma_mode == "light" and not region_mode:
+                if args.chroma_mode == "light":
                     _cn = pp.estimate_chroma_noise(np.asarray(im))
                     # 色度本来就很干净（<0.3）就不动，避免"越降越差"
                     _s = float(pp.chroma_light_strength(_cn))
