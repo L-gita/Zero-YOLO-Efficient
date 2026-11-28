@@ -216,8 +216,6 @@ def main():
                     help="auto 模式强度；-1=自动（A 档：按色度噪声自动 跳过/轻度/常规/近黑），1.0=强制全强度，0=完全等价原版，也可给 0~2")
     ap.add_argument("--chroma-mode", choices=["light", "smooth", "desat", "none"], default="light",
                     help="auto 模式下如何处理色度：light=只做轻度色度平滑(不动亮度/纹理，推荐想少噪点又想保颗粒时用)；smooth=局部平滑(更干净但可能出色块边界)；desat=全局等比去饱和；none=完全不碰色度")
-    ap.add_argument("--region-mode", choices=["gain", "blend"], default="gain",
-                    help="region 模式的分区处理方式：gain=暗区逐像素 gamma 提亮（保纹理，推荐）；blend=混入平滑中性抬亮（更干净但会抹纹理）")
     ap.add_argument("--v4-strength", type=float, default=0.9, help="v4 色度去噪强度（默认 0.9）")
     ap.add_argument("--v4-tau", type=float, default=5.0, help="v4 色度噪声阈值（越大越保守）")
     ap.add_argument("--v4-beta", type=float, default=1.6, help="v4 亮度结构保护系数（越大越保护真实彩边）")
@@ -334,18 +332,11 @@ def main():
                     _p20 = float(np.percentile(_yl, 20))
                     _p50 = float(np.percentile(_yl, 50))
                     _wfrac = float((_yl < _p20).mean())
-                    if args.region_mode == "gain":
-                        u8 = pp.region_gain(u8, np.asarray(im),
-                                            q_lo=25.0, q_hi=55.0, gamma_amount=0.35,
-                                            chroma_lo=0.8, chroma_hi=1.8, chroma_strength=0.80)
-                        _how = "暗区 gamma 提亮（保纹理）+ 暗区色度平滑"
-                    else:
-                        u8 = pp.region_adaptive(u8, np.asarray(im),
-                                                q_lo=25.0, q_hi=55.0, dark_strength=0.60, dark_gamma=0.55,
-                                                chroma_lo=1.5, chroma_hi=2.5, chroma_strength=0.50)
-                        _how = "暗区混入中性抬亮（更干净但抹纹理）+ 暗区色度平滑"
-                    print(f"    [region/{args.region_mode}] 局部亮度 P20={_p20:.1f} P50={_p50:.1f} "
-                          f"暗区占比≈{_wfrac*100:.0f}% → {_how}；亮区=原版")
+                    u8 = pp.region_adaptive(u8, np.asarray(im),
+                                            q_lo=25.0, q_hi=55.0, dark_strength=0.60, dark_gamma=0.55,
+                                            chroma_lo=1.5, chroma_hi=2.5, chroma_strength=0.50)
+                    print(f"    [region] 局部亮度 P20={_p20:.1f} P50={_p50:.1f} 暗区占比≈{_wfrac*100:.0f}% "
+                          f"→ 暗区混入中性抬亮 + 暗区色度平滑；亮区=原版")
                 if args.chroma_mode == "light" and not region_mode:
                     _cn = pp.estimate_chroma_noise(np.asarray(im))
                     # 色度本来就很干净（<0.3）就不动，避免"越降越差"
