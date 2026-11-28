@@ -540,6 +540,11 @@ jpg / 灰度 / RGBA / 调色板 / 文件夹递归 / 坏文件 全部正常；16-
 
 本提交即“最终版”：`enhance.py`（378 行）+ `scripts/preprocess.py` + 三个一键入口与对比工具 + 文档。
 
+### 8.15 分区自适应（实验）与指标算法文档
+
+- `--preprocess region`（实验）：全局不做预处理，按**局部亮度分位**给暗区做中性抬亮、按**局部色度噪声**做色度平滑，亮区保持原版输出。实现 `scripts/preprocess.py: local_luma/local_chroma_noise/region_adaptive`。
+- 指标说明：`docs/指标定义与算法.md`（每个指标的公式、代码位置、阈值与参考文献，答辩可直接引用）。
+
 ## 9. 2026-11-27 修订：auto v3（修正“偏绿 / 噪点多”，并修好大图 OOM）
 
 **问题**：用户反馈 493 那张玩偶图（eval15/493.png）用 `--preprocess auto` 后整体偏绿、噪点多；
