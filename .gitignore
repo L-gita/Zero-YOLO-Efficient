@@ -83,3 +83,10 @@ demo_branch_compare/
 # compare 工具的中间缓存
 demo_final_vs_base/*/_raw/
 demo_branch_compare/_raw/
+去马赛克最终版结果/
+Zero原版结果/
+边缘增强结果/
+demo_mosaic/edges_now/
+demo_mosaic/now126/
+weights/yolov8n.pt
+weights/*.pt
