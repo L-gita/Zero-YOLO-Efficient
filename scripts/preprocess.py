@@ -506,7 +506,10 @@ def auto_preprocess(low, strength=1.0):
     # 只对亮度做轻度降噪：色度降噪留给"增强后、低信号平坦区"（在输入上动色度会造成偏色，
     # 因为 Zero-DCE 的曲线是逐通道独立的，输入色度一变，输出颜色就跟着偏）
     if s > 0:
-        x = luma_denoise(x, h=1.5 + 0.5 * k, strength=min(1.0, s))
+        # 近黑图（整图均值<5）不做亮度降噪：亮度侧真正的处理是后置的“近黑限增益”，
+        # 这里再做 NLM 只会磨掉细节、并把噪声的“掩蔽作用”抹掉（反而让台阶更明显）。
+        if s > 0 and gray_mean >= 5.0:
+            x = luma_denoise(x, h=1.5 + 0.5 * k, strength=min(1.0, s))
     did_prelift = False
     if gray_mean < 4.0 and s > 0:      # 只有"几乎全黑"才轻抬，避免正常暗图被抬亮后变淡
         x = prelift(x, amount=0.08 * s)
