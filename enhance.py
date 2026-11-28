@@ -249,6 +249,7 @@ def main():
     auto_mode = _pp in ("auto", "v4") or args.denoise < 0
     use_pre = (args.denoise > 0 or args.deblock > 0 or args.prelift > 0)
     use_post = (args.post > 0 or args.guided > 0 or args.limit_dark > 0)
+    _mode = None
     if auto_mode:
         print("[预处理] auto 场景自适应（E10）" + ("+v4（A+B 色度去噪）" if v4_mode else "") +
               "：先估噪声/块效应，再按需降噪/去块/轻抬；暗图才做近黑限增益")
@@ -296,9 +297,11 @@ def main():
                     s_eff = _dec["s_eff"]
                     print(f"    [判定] 均值 {_dec['mean']:5.1f}  色度噪声 {_dec['chroma_noise']:4.2f} "
                           f"→ {_dec['mode']}（强度 {s_eff:.2f}）")
+                    _mode = _dec["mode"]
                 else:
                     s_eff = args.auto_strength
                     _dec = None
+                    _mode = None
                 if s_eff <= 0.0:
                     # 跳过改进：预处理/后处理都不做，输出与 "-m sice" 逐像素一致（含不加暗部补偿）
                     pre = im
@@ -398,7 +401,9 @@ def main():
             # 只有"启用了预处理"时才自动加暗部补偿；-m sice（纯原版）必须保持原样
             _pre_on = auto_mode or (args.preprocess or "none").lower() != "none"
             _m = float(np.mean(np.asarray(im.convert("L"), dtype=np.float32)))
-            _lift = 4.0 if (_m < 15.0 and _pre_on) else 0.0
+            _near_black = (_mode == "near_black") if auto_mode else False
+            # 近黑分支已经做过"近黑限增益（含中性抬亮）"，再叠 +4 级会重复抬暗部 → 跳过
+            _lift = 4.0 if (_m < 15.0 and _pre_on and not _near_black) else 0.0
         if _skipped:
             _lift = 0.0        # 跳过改進时必须与 "-m sice" 完全一致
         if _lift > 0:
