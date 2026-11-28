@@ -5,7 +5,7 @@
 # 三个版本入口的统一实现（由同目录 .bat 用环境变量 ZERODCE_ENTRY 指定）：
 #   original → Zero 原版（不加任何改进）
 #   edge     → 仅边缘增强版（论文 4.9~4.12 的 Sobel 边缘损失，无马赛克预处理）
-#   mosaic   → 去马赛克最终版（auto v3 场景自适应预处理，不含边缘损失）
+#   mosaic   → 去马赛克最终版（两分支场景自适应：近黑专项 + 常规仅色度轻平滑；不含边缘损失）
 $Entry = "$($env:ZERODCE_ENTRY)".Trim().ToLower()
 if ($Entry -notin @('original', 'edge', 'mosaic')) { $Entry = 'mosaic' }
 

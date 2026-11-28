@@ -279,10 +279,10 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 | --- | --- | --- | --- |
 | `1_Zero原版.bat` | **Zero 原版**：原始 Zero-DCE，不加任何改进（`-m sice`） | `Zero原版结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
 | `2_边缘增强版.bat` | **只有边缘增强**：论文 (4.9)~(4.12) 的 Sobel 边缘损失权重（`-m edge`），不含马赛克预处理 | `边缘增强结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
-| `3_去马赛克最终版.bat` | **去马赛克最终版** = 之前说的 **auto v3**（`--preprocess auto`），不含边缘损失 | `去马赛克最终版结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
+| `3_去马赛克最终版.bat` | **去马赛克最终版** = `--preprocess auto`（两分支场景自适应），不含边缘损失 | `去马赛克最终版结果\` | `xxx_enhanced.png` + `xxx_compare.png` |
 
 > **名词对照（同一个东西的几种叫法）**：
-> `去噪增强` = `去马赛克增强` = `--preprocess auto` = `auto v3` = 现在的 **`去马赛克最终版`**。
+> `去噪增强` = `去马赛克增强` = `--preprocess auto` = 现在的 **`去马赛克最终版`**（“auto v3”是历史叫法）。
 > 「边缘增强版」是另一条线：只加 Sobel 边缘损失、不做去马赛克预处理；两者互不包含。
 
 用法（三选一）：
