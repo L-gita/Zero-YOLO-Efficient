@@ -90,3 +90,5 @@ demo_mosaic/edges_now/
 demo_mosaic/now126/
 weights/yolov8n.pt
 weights/*.pt
+demo_mosaic/attribution/
+demo_mosaic/luma_ablation/
