@@ -608,7 +608,7 @@ def estimate_chroma_noise(img_rgb):
 
 
 def auto_decision(img_rgb, mean=None, chroma_noise=None):
-    """A 档：按图像内容决定"跳过改进 / 轻度 / 正常 / 近黑强处理"。
+    """A 档：按图像内容决定"常规（仅色度轻度平滑）/ 近黑强处理"。
 
     返回 dict(mode, s_eff, mean, chroma_noise)。
       skip       : 色度噪声 < 1.5 且不是近黑 → 亮度侧不处理（保持原版纹理）；
@@ -623,10 +623,8 @@ def auto_decision(img_rgb, mean=None, chroma_noise=None):
         chroma_noise = estimate_chroma_noise(arr)
     if mean < 5.0:
         mode, s_eff = "near_black", 1.0      # 近黑：预处理 + 中性抬亮
-    elif chroma_noise < 1.5:
-        mode, s_eff = "skip", 0.0            # 跳过"亮度侧"处理（色度侧仍按 chroma_light 轻平滑）
     else:
-        mode, s_eff = "normal", 0.20         # 常规暗图：轻度亮度处理
+        mode, s_eff = "normal", 0.0   # 常规暗图：不做输入侧预处理（亮度降噪会磨纹理/搬噪声），色度平滑放后处理
     return dict(mode=mode, s_eff=s_eff, mean=float(mean), chroma_noise=float(chroma_noise))
 
 

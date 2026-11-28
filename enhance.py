@@ -210,7 +210,7 @@ def main():
     ap.add_argument("--dark-smooth", type=int, default=8,
                     help="近黑区抬亮前对亮度做大模糊的半径（消除 8bit 台阶造成的硬灰块）")
     ap.add_argument("--auto-strength", type=float, default=-1.0,
-                    help="auto 模式强度；-1=自动（A 档：按色度噪声自动 跳过/轻度/常规/近黑），1.0=强制全强度，0=完全等价原版，也可给 0~2")
+                    help="auto 模式强度；-1=自动（A 档：非近黑图不做亮度预处理、仅按色度噪声轻平滑；近黑图强处理），1.0=强制全强度，0=完全等价原版，也可给 0~2")
     ap.add_argument("--chroma-mode", choices=["light", "smooth", "desat", "none"], default="light",
                     help="auto 模式下如何处理色度：light=只做轻度色度平滑(不动亮度/纹理，推荐想少噪点又想保颗粒时用)；smooth=局部平滑(更干净但可能出色块边界)；desat=全局等比去饱和；none=完全不碰色度")
     ap.add_argument("--v4-strength", type=float, default=0.9, help="v4 色度去噪强度（默认 0.9）")
@@ -290,7 +290,7 @@ def main():
             info = None
             _skipped = False
             if auto_mode:
-                # A 档：按图像色度噪声 + 均值自动决定 跳过/轻度/常规/近黑（见 scripts/preprocess.py: auto_decision）
+                # A 档：按图像均值/色度噪声自动决定 常规（仅色度轻平滑）/ 近黑（强处理）（见 scripts/preprocess.py: auto_decision）
                 if args.auto_strength < 0:
                     # A 档：按图像内容自动决定强度（跳过 / 轻度 / 常规 / 近黑）
                     _dec = pp.auto_decision(np.asarray(im))
@@ -303,10 +303,10 @@ def main():
                     _dec = None
                     _mode = None
                 if s_eff <= 0.0:
-                    # 跳过改进：预处理/后处理都不做，输出与 "-m sice" 逐像素一致（含不加暗部补偿）
+                    # 常规暗图：不做输入侧预处理（色度噪声 <0.3 时连色度也不动，输出与 "-m sice" 逐像素一致）
                     pre = im
                     _skipped = True
-                    print("    [判定] 该图色度干净、再降噪只会抹平颗粒 → 输出等同原版")
+                    print("    [常规] 不做亮度预处理（色度侧稍后按噪声强度轻平滑）")
                 else:
                     info = pp.auto_preprocess(np.asarray(im), strength=s_eff)
                     pre = Image.fromarray(info["img"])
@@ -322,7 +322,7 @@ def main():
             raw, mode = enhance_image(net, pre, args.tile, return_float=_need_float)
             # ③ 增强后的处理：auto=近黑限增益（只动亮度）+ 近黑区掩码色度降噪；否则用旧逻辑
             if auto_mode and s_eff <= 0.0:
-                # 跳过亮度处理：等价原版；若 --chroma-mode light，则只对色度做轻度平滑（不动亮度/纹理）
+                # 常规暗图：亮度侧不处理；若 --chroma-mode light，则只对色度做轻度平滑（不动亮度/纹理）
                 u8 = (np.clip(raw, 0, 1) * 255.0 + 0.5).astype(np.uint8) if (isinstance(raw, np.ndarray) and raw.dtype != np.uint8) else np.asarray(raw).astype(np.uint8)
                 if args.chroma_mode == "light":
                     _cn = pp.estimate_chroma_noise(np.asarray(im))

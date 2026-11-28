@@ -39,7 +39,7 @@ SETS = [
     ("04_LOL评估集", os.path.join(LIB, "04_LOL评估集")),
 ]
 
-MODE_CN = {"near_black": "近黑分支", "skip": "跳过亮度(仅色度轻平滑)", "normal": "常规暗图"}
+MODE_CN = {"near_black": "近黑分支", "normal": "常规（仅色度轻平滑）"}
 
 
 def imread_rgb(path):
@@ -160,7 +160,7 @@ def main():
         return float(np.mean([r[key] for r in rs]))
 
     sets = sorted({r["set"] for r in rows})
-    modes = ["near_black", "skip", "normal"]
+    modes = ["near_black", "normal"]
     lines = ["# 原版 Zero-DCE vs 去马赛克最终版（批量对比）", "",
              f"共 **{len(rows)}** 张图。每张图先按算法判定分支，再分别跑原版与最终版。", "",
              "## 按数据集", "",
@@ -186,12 +186,12 @@ def main():
         lines.append(f"| {MODE_CN.get(m, m)} | {len(rs)} | {agg(rs,'bright_base'):.1f}→{agg(rs,'bright_final'):.1f} "
                      f"| {cb:.2f}→{cf:.2f} | {delta:+.1f}% | {agg(rs,'std8_base'):.2f}→{agg(rs,'std8_final'):.2f} |")
     same = sum(1 for r in rows if r.get("identical"))
-    n_skip = sum(1 for r in rows if r["mode"] == "skip")
+    n_skip = sum(1 for r in rows if r["mode"] == "normal")
     lines += ["", "## 结论口径", "",
-              f"- 「跳过亮度」分支共 {n_skip} 张：亮度侧不处理，但其中色度噪声 ≥0.3 的图仍会做**色度轻度平滑**；",
+              f"- 「常规」分支共 {n_skip} 张：**完全不做亮度侧处理**（不做亮度降噪/不做输入预处理），只按输入色度噪声做轻度色度平滑；",
               f"  其中 **{same} 张（σc<0.3）输出与原版逐像素一致**。",
               "- 「近黑分支」是唯一会改变亮度的分支（中性抬亮 + 暗部补偿），色噪/彩色块下降最明显。",
-              "- 「常规暗图」分支只做轻度亮度处理 + 色度平滑。", ""]
+              "",]
     with open(os.path.join(OUT, "summary.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     print("[ok]", os.path.join(OUT, "summary.md"))
