@@ -80,3 +80,6 @@ demo_mosaic/e9_check/sat/
 demo_mosaic/e9_check/fmt_*.pngdemo_mosaic/_smoke_rm/
 demo_mosaic/dither_ab/V*/
 demo_branch_compare/
+# compare 工具的中间缓存
+demo_final_vs_base/*/_raw/
+demo_branch_compare/_raw/
