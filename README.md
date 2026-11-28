@@ -633,6 +633,18 @@ Immerkær 噪声估计、PSNR/SSIM、Canny 边缘 P/R 等 12 类的公式与代�
 - 结论：**保持"常规图不动亮度"**；若后续要做"机器模式"，优先级应是①曝光归一化（单调、不造边）②高信噪比区域边缘自适应锐化 ③16-bit 输出，而不是全局 CLAHE/USM。
 - 数据：`docs/luma_ablation_summary.md`、`docs/luma_yolo_v0_vs_v2.csv`、`demo_mosaic/luma_ablation/metrics.csv`。
 
+### 8.22 指标计算器（2026-11-28）
+
+用途：**输入一张图 → 同时给出「输入图」和「经最终版增强后」的全部指标**，用于答辩/论文里的量化证据。
+
+- 双击入口：`指标计算器.bat`（弹选图框，可多选；也支持把图片/文件夹拖上去）
+- 命令行：`python scripts\image_metrics.py 图.png -o 输出 --with-base`（`--with-base` 加原版基线对照；`--gt 正常光.png` 算 PSNR/SSIM/边缘 P·R）
+- 自检：`python scripts\image_metrics.py --self-test`（24 项，用已知答案的合成图验证指标；不通过不继续）
+- 输出：`metrics.csv`（数值）、`report.md`（指标定义 + 逐图表格 + 真实判定日志）、`figures/*_compare.png`（三联图）
+
+指标实现集中在 `scripts/metrics_lib.py`（纯函数、无常量）；增强直接调 `enhance.py` 子进程，与 `3_去马赛克最终版.bat` 同一份代码。
+审计结论见 `docs/代码审计报告.md`（无"一律通过"的伪造逻辑），使用说明见 `docs/指标计算器使用说明.md`。
+
 ## 9. 2026-11-27 修订：auto v3（修正“偏绿 / 噪点多”，并修好大图 OOM）
 
 **问题**：用户反馈 493 那张玩偶图（eval15/493.png）用 `--preprocess auto` 后整体偏绿、噪点多；

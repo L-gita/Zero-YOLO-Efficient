@@ -314,3 +314,9 @@ python C:\Users\12983\Documents\repro\enhance.py 照片.jpg -m sice -c
 
 常规分支的色度平滑强度按输入色度噪声 σc 分段：<0.3 跳过；0.3~0.6 用 0.35·σc（下限 0.15）；
 0.6~1.0 用 0.5·σc；≥1.0 用 0.7·σc（上限 0.7）。想让某张图更强/更弱，可 `--chroma-mode smooth|none` 或 `--auto-strength` 手动覆盖。
+
+### 14. 指标计算器（输入图 vs 最终版增强图）
+
+双击 `指标计算器.bat` → 选图片 → 自动输出 `指标结果\metrics.csv` + `report.md` + 三联对比图。
+命令行同样可用：`python scripts\image_metrics.py 图.png --with-base --gt 正常光.png`。
+指标定义与可信性说明见 `docs\指标计算器使用说明.md`；代码审计见 `docs\代码审计报告.md`。

@@ -92,3 +92,5 @@ weights/yolov8n.pt
 weights/*.pt
 demo_mosaic/attribution/
 demo_mosaic/luma_ablation/
+指标结果/
+demo_metrics/

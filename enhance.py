@@ -57,14 +57,27 @@ import preprocess as pp
 import preprocess_v4 as ppv4  # noqa: E402
 
 EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
+_FALLBACK_USED = {}
+
+
 def _w(rel, backup):
     """权重路径：优先用 Zero-DCE_code 下的训练目录；若不存在（例如换机器只 clone 了仓库），
-    回退到仓库里随代码一起提交的 weights/ 目录，保证开箱可用。"""
+    回退到仓库里随代码一起提交的 weights/ 目录，保证开箱可用。
+    注意：发生回退时会记入 _FALLBACK_USED，main() 启动时会打印 [warn]，避免"以为用了 A 权重其实用了 B"。"""
     p = os.path.join(CODE, rel)
     if os.path.exists(p):
         return p
     q = os.path.join(ROOT, "weights", backup)
-    return q if os.path.exists(q) else p
+    if os.path.exists(q):
+        _FALLBACK_USED[rel] = backup
+        return q
+    return p
+
+
+def warn_fallbacks():
+    for rel, backup in sorted(_FALLBACK_USED.items()):
+        print(f"[warn] 训练目录权重缺失：{rel} → 已回退到 weights/{backup}")
+        print(f"       （要使用训练目录里的权重，请确认 {os.path.join(CODE, rel)} 存在）")
 
 
 MODELS = {
@@ -221,6 +234,7 @@ def main():
                     help="阴影补偿（Y 通道暗部抬几级）；-1=自动（启用预处理且输入均值<15 时抬 4 级；-m sice 原版不受影响），0=关闭")
     ap.add_argument("--bit16", action="store_true", help="输出 16-bit PNG")
     args = ap.parse_args()
+    warn_fallbacks()
     # 新抖动模式下不再重复做旧抖动（避免双重抖动/混淆）
 
     # 预设 → 具体参数（显式给出的参数优先）

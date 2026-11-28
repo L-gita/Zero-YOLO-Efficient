@@ -101,6 +101,8 @@ def main():
 
     os.makedirs(OUT, exist_ok=True)
     rows = []
+    n_total, n_skipped = 0, 0
+    skipped_files = []
     for name, d in SETS:
         if wanted and not any(name.startswith(w) for w in wanted):
             continue
@@ -118,6 +120,7 @@ def main():
         fdir = os.path.join(OUT, "final", name)
         run_enhance(files, bdir, ["-m", "sice"])
         run_enhance(files, fdir, ["--preprocess", "auto"])
+        n_total += len(files)
         for f in files:
             stem = os.path.splitext(os.path.basename(f))[0]
             low = imread_rgb(f)
@@ -129,7 +132,9 @@ def main():
             fp = next((os.path.join(fdir, stem + "_enhanced" + e) for e in exts
                        if os.path.exists(os.path.join(fdir, stem + "_enhanced" + e))), None)
             if bp is None or fp is None:
-                print("  缺少输出:", stem)
+                n_skipped += 1
+                skipped_files.append(os.path.basename(f))
+                print("  [跳过] 缺少输出:", stem)
                 continue
             b_arr, f_arr = imread_rgb(bp), imread_rgb(fp)
             m = metrics(low, b_arr, f_arr)
@@ -139,7 +144,7 @@ def main():
                              mode=dec["mode"], identical=identical,
                              mean=round(dec["mean"], 2), chroma_in=round(dec["chroma_noise"], 3), **{
                                  k: round(v, 3) if isinstance(v, float) else v for k, v in m.items()}))
-        print(f"   完成 {len(files)} 张")
+        print(f"   完成 {len(files) - n_skipped} 张（累计跳过 {n_skipped}）")
 
     if not rows:
         raise SystemExit("没有结果")
