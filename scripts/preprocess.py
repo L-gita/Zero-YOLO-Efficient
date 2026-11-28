@@ -473,6 +473,47 @@ def region_adaptive(raw_rgb, low_rgb,
     return np.clip(raw, 0, 255).astype(np.uint8)
 
 
+def region_gain(raw_rgb, low_rgb,
+                q_lo=25.0, q_hi=55.0, gamma_amount=0.85, chroma_lo=1.5, chroma_hi=2.5,
+                chroma_strength=0.50, chroma_radius=5, chroma_sigma=18):
+    """分区"乘法增益"版：暗区做逐像素提亮 gamma（保纹理），不做任何加权平均。
+
+    与 region_adaptive 的区别：
+      - region_adaptive 把暗区"混入"平滑的中性抬亮结果 → 亮度上去了但纹理被抹平；
+      - region_gain 只对暗区做**单调映射** out = 255*(raw/255)^(1/(1+k*w))：
+        单调映射不改变像素间的相对差异 → 纹理/颗粒保留，只是整体提亮；
+        代价是暗区噪声也一起被提亮（所以配套做色度平滑）。
+    参数 w 仍由局部亮度分位决定（同上：P25~P55 渐变）。
+    """
+    raw = np.asarray(raw_rgb, dtype=np.float32)
+    low = np.asarray(low_rgb, dtype=np.uint8)
+    x = np.clip(raw, 0.0, 255.0) / 255.0
+
+    yl = local_luma(low, sigma=12.0)
+    p_lo = float(np.percentile(yl, float(q_lo)))
+    p_hi = float(np.percentile(yl, float(q_hi)))
+    w = np.clip((p_hi - yl) / max(p_hi - p_lo, 1e-6), 0.0, 1.0)
+    w = w * w * (3.0 - 2.0 * w)
+
+    # 逐像素 gamma：gamma=1 处不变，gamma>1 处提亮（暗区）
+    g = 1.0 + float(gamma_amount) * w
+    out = np.power(np.clip(x, 1e-4, 1.0), 1.0 / g[..., None]) * 255.0
+
+    # 暗区色度平滑（按局部色噪强度加权）：色噪在"增强后"才明显，故用 raw 估
+    cn_map = local_chroma_noise(np.asarray(raw_rgb), sigma_hp=1.5, sigma_map=16.0)
+    wc = np.clip((cn_map - float(chroma_lo)) / max(float(chroma_hi) - float(chroma_lo), 1e-6), 0.0, 1.0)
+    wc = wc * float(np.clip(chroma_strength, 0.0, 1.0)) * w
+    if float(wc.max()) > 1e-3:
+        ycc2 = cv2.cvtColor(np.clip(out, 0, 255).astype(np.uint8), cv2.COLOR_RGB2YCrCb).astype(np.float32)
+        for c in (1, 2):
+            sm = cv2.bilateralFilter(ycc2[..., c].astype(np.uint8), int(chroma_radius),
+                                     float(chroma_sigma), float(chroma_sigma)).astype(np.float32)
+            ycc2[..., c] = ycc2[..., c] + wc * (sm - ycc2[..., c])
+        out = cv2.cvtColor(np.clip(ycc2, 0, 255).astype(np.uint8), cv2.COLOR_YCrCb2RGB).astype(np.float32)
+
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
 def estimate_noise(rgb):
     """用暗区拉普拉斯残差的 MAD 估噪声 sigma（0~255 单位）"""
     g = cv2.cvtColor(np.asarray(rgb, dtype=np.uint8), cv2.COLOR_RGB2GRAY).astype(np.float32)
